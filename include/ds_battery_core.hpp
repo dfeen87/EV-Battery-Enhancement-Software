@@ -85,7 +85,7 @@ constexpr double ELECTRON_CHARGE = 1.602176634e-19; // e (C)
 struct DSConfig {
     bool enable_feen_battery_integration = false;
     double lambda = 1e-6;           // Coupling strength λ
-    double tau_min = 0.01;          // Minimum update interval (s)
+    double tau_min = 0.01;          // Minimum accepted interval (s); shorter cycles are rejected
     double phi_decay_rate = 0.001;  // Information decay rate
     double thermodynamic_beta = 1.0;     // Thermodynamic energy scaling
     double entropy_weight = 0.5;    // Entropy contribution to Φ
@@ -346,7 +346,7 @@ public:
             throw std::invalid_argument("Update interval must be finite and positive");
         }
         if (dt < config_.tau_min) {
-            return;
+            throw std::invalid_argument("Update interval is below tau_min");
         }
         
         // Validate input state
@@ -354,22 +354,25 @@ public:
             throw std::runtime_error("Invalid DSState before update");
         }
         
-        // Update time
-        state.time += dt;
-        state.last_update = state.time;
+        // Direct callers receive the same strong exception guarantee as the
+        // owning enhancement API: publish only a completely validated update.
+        DSState candidate = state;
+        candidate.time += dt;
+        candidate.last_update = candidate.time;
         
-        state.lambda = config_.lambda * (1.0 + 0.1 * state.degradation);
+        candidate.lambda = config_.lambda * (1.0 + 0.1 * candidate.degradation);
         
         // Update state variables using empirical model
-        update_phi(state, dt);
-        compute_phi_gradients(state);
-        compute_effective_metric(state);
-        compute_energies(state);
+        update_phi(candidate, dt);
+        compute_phi_gradients(candidate);
+        compute_effective_metric(candidate);
+        compute_energies(candidate);
         
         // Validate output state
-        if (!state.is_valid()) {
+        if (!candidate.is_valid()) {
             throw std::runtime_error("Invalid DSState after update");
         }
+        state = candidate;
     }
     
     // Predict future degradation using clean empirical models
@@ -459,6 +462,8 @@ public:
     // Main enhancement function - call once per BMS cycle
     // INPUT: Raw sensor readings from existing BMS
     // OUTPUT: Enhanced state with DS predictions
+    // Intervals below tau_min are rejected as complete cycles, without buffering
+    // time or sensor inputs. Supply a full interval or configure a smaller minimum.
     EnhancedState enhance(double voltage, double current, 
                          double temperature, double soc, 
                          double dt = 0.1) {
@@ -470,6 +475,9 @@ public:
             !std::isfinite(current) || !std::isfinite(temperature) ||
             !std::isfinite(soc) || !std::isfinite(dt) || dt <= 0.0) {
             throw std::invalid_argument("Sensor values must be finite, voltage and dt must be positive");
+        }
+        if (dt < config_.tau_min) {
+            throw std::invalid_argument("Enhancement interval is below tau_min");
         }
         
         // Bounds checking: clamp inputs and set flag instead of throwing
@@ -499,26 +507,27 @@ public:
         // change in stored energy caused by new physical sensor measurements.
         double energy_error = std::abs(candidate.energy_total -
             (candidate.energy_psi + candidate.energy_phi + candidate.energy_metric));
-        state_ = candidate;
-        cumulative_energy_error_ += energy_error;
         
         // Generate predictions
         EnhancedState result;
-        result.state = state_;
-        result.health = coupling_.predict_health(state_, 100.0); // 100 cycle horizon
-        result.charging = coupling_.optimize_charging(state_);
+        result.state = candidate;
+        result.health = coupling_.predict_health(candidate, 100.0); // 100 cycle horizon
+        result.charging = coupling_.optimize_charging(candidate);
         result.degradation_warning = result.health.warning_triggered;
         result.ds_confidence = result.health.confidence;
         result.input_clamped = input_clamped;
         result.energy_conservation_error = energy_error;
-        result.numerical_stability = state_.is_valid() && state_.g_eff.is_stable() &&
+        result.numerical_stability = candidate.is_valid() && candidate.g_eff.is_stable() &&
             (energy_error <= config_.energy_conservation_tolerance);
         
         if (config_.enable_feen_battery_integration) {
-            double trust = feen_adapter_.compute_battery_trust_from_feen(state_.voltage);
+            double trust = feen_adapter_.compute_battery_trust_from_feen(candidate.voltage);
             result.feen_trust_metric = trust;
             result.ds_confidence *= trust;
         }
+        // Complete optional result preparation before publishing owned state.
+        state_ = candidate;
+        cumulative_energy_error_ += energy_error;
         return result;
     }
     

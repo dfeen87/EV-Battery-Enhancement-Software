@@ -171,6 +171,11 @@ if(DS_BUILD_TESTS)
     add_test(NAME test_core COMMAND test_core)
     ds_enable_test_assertions(test_core)
 
+    add_executable(test_state_integrity tests/test_state_integrity.cpp)
+    target_link_libraries(test_state_integrity PRIVATE ds_battery)
+    add_test(NAME test_state_integrity COMMAND test_state_integrity)
+    ds_enable_test_assertions(test_state_integrity)
+
     add_executable(test_feen_integration tests/test_feen_integration.cpp)
     target_link_libraries(test_feen_integration PRIVATE ds_battery)
     add_test(NAME test_feen_integration COMMAND test_feen_integration)
