@@ -63,6 +63,8 @@ struct DiagnosticReport {
     bool degradation_warning = false;
     bool balancing_required = false;
     bool safety_fault = false;
+    bool soc_warning = false;
+    bool low_temp_warning = false;
 
     double instantaneous_power_kw = 0.0;
     double average_efficiency = 0.95;
@@ -132,13 +134,19 @@ class SafetyMonitor {
     SafetyLimits limits_;
     bool fault_active_ = false;
     std::vector<std::string> faults_;
+    std::vector<std::string> advisories_;
+    bool soc_warning_ = false;
+    bool low_temp_warning_ = false;
 
 public:
     explicit SafetyMonitor(const SafetyLimits& limits = {}) : limits_(limits) {}
 
     bool check(const ds::DSState& s, const DiagnosticReport& d) {
         faults_.clear();
+        advisories_.clear();
         fault_active_ = false;
+        soc_warning_ = false;
+        low_temp_warning_ = false;
 
         if (s.current > limits_.max_discharge_current)
             faults_.push_back("Discharge current exceeded");
@@ -155,12 +163,43 @@ public:
         if (d.max_cell_temp_c > limits_.max_cell_temp)
             faults_.push_back("Cell temperature critical");
 
+        if (s.state_of_charge < limits_.min_soc) {
+            soc_warning_ = true;
+            if (s.current > 0.0) {
+                faults_.push_back("SOC below minimum operating limit while discharging");
+            } else if (s.current == 0.0) {
+                advisories_.push_back("SOC below minimum operating limit while resting");
+            }
+        }
+
+        if (s.state_of_charge > limits_.max_soc) {
+            soc_warning_ = true;
+            if (s.current < 0.0) {
+                faults_.push_back("SOC above maximum operating limit while charging");
+            } else if (s.current == 0.0) {
+                advisories_.push_back("SOC above maximum operating limit while resting");
+            }
+        }
+
+        if (s.temperature < limits_.min_operating_temp) {
+            low_temp_warning_ = true;
+            if (s.current != 0.0) {
+                faults_.push_back("Temperature below minimum operating limit while active");
+            } else {
+                advisories_.push_back("Temperature below minimum operating limit while resting");
+            }
+        }
+
         if (!faults_.empty()) fault_active_ = true;
         return !fault_active_;
     }
 
     bool has_fault() const { return fault_active_; }
     const std::vector<std::string>& faults() const { return faults_; }
+
+    const std::vector<std::string>& advisories() const { return advisories_; }
+    bool has_soc_warning() const { return soc_warning_; }
+    bool has_low_temp_warning() const { return low_temp_warning_; }
 };
 
 /* ================= MIDDLEWARE ================= */
@@ -369,8 +408,11 @@ private:
 
         diag_.estimated_remaining_cycles = std::max(0.0, (1.0 - s.degradation) * 2000.0);
 
-        if (config_.enable_safety_monitoring)
+        if (config_.enable_safety_monitoring) {
             diag_.safety_fault = !safety_.check(observed, diag_);
+            diag_.soc_warning = safety_.has_soc_warning();
+            diag_.low_temp_warning = safety_.has_low_temp_warning();
+        }
 
         diag_.time_since_init_s += dt;
         diag_.update_count = ++updates_;
