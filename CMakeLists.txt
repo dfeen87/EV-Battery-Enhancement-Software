@@ -191,6 +191,21 @@ if(DS_BUILD_TESTS)
     add_test(NAME test_protection_envelopes COMMAND test_protection_envelopes)
     ds_enable_test_assertions(test_protection_envelopes)
 
+    add_executable(test_direct_numeric_boundaries tests/test_direct_numeric_boundaries.cpp)
+    target_link_libraries(test_direct_numeric_boundaries PRIVATE ds_battery)
+    add_test(NAME test_direct_numeric_boundaries COMMAND test_direct_numeric_boundaries)
+    ds_enable_test_assertions(test_direct_numeric_boundaries)
+
+    add_executable(test_regen_boundaries tests/test_regen_boundaries.cpp)
+    target_link_libraries(test_regen_boundaries PRIVATE ds_battery)
+    add_test(NAME test_regen_boundaries COMMAND test_regen_boundaries)
+    ds_enable_test_assertions(test_regen_boundaries)
+
+    add_executable(test_bms_adapter_evidence tests/test_bms_adapter_evidence.cpp)
+    target_link_libraries(test_bms_adapter_evidence PRIVATE ds_ailee_governor)
+    add_test(NAME test_bms_adapter_evidence COMMAND test_bms_adapter_evidence)
+    ds_enable_test_assertions(test_bms_adapter_evidence)
+
     add_executable(test_ailee_governor tests/test_ailee_governor.cpp)
     target_link_libraries(test_ailee_governor PRIVATE ds_ailee_governor)
     if(DS_ENABLE_PYTHON_GOVERNOR)

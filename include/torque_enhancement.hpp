@@ -233,6 +233,44 @@ struct alignas(64) TorqueConfig {
     // Diagnostics
     bool enable_logging = true;
     double logging_interval_s = 1.0;
+
+    bool validate() const {
+        const auto& motor = drivetrain.rear_motor;
+        // Validate fields consumed by this manager; unrelated feature metadata is advisory.
+        const double values[] = {motor.peak_torque_nm, motor.base_speed_rpm, motor.max_speed_rpm,
+            motor.efficiency_peak_rpm, motor.peak_power_kw, motor.max_motor_temp_c,
+            motor.max_inverter_temp_c, motor.thermal_derating_start_c, motor.inverter_derating_start_c,
+            motor.torque_rise_rate_nm_per_s, motor.torque_fall_rate_nm_per_s, drivetrain.front_weight_dist,
+            battery.max_discharge_power_kw, battery.max_charge_power_kw, battery.temp_soft_limit_c,
+            battery.temp_hard_limit_c, battery.temp_cold_limit_c, battery.soc_min_normal,
+            battery.soc_min_critical, battery.soc_max_regen, battery.soc_max_full,
+            ds_weights.health_influence, ds_weights.entropy_influence, ds_weights.metric_stress_influence,
+            ds_weights.eco_power_fraction, ds_weights.normal_power_fraction, ds_weights.sport_power_fraction,
+            ds_weights.min_torque_fraction, ds_weights.max_ds_derate, overboost_duration_s,
+            overboost_power_multiplier};
+        for (double value : values) if (!std::isfinite(value)) return false;
+        const double fractions[] = {drivetrain.front_weight_dist, battery.soc_min_normal,
+            battery.soc_min_critical, battery.soc_max_regen, battery.soc_max_full,
+            ds_weights.health_influence, ds_weights.entropy_influence, ds_weights.metric_stress_influence,
+            ds_weights.eco_power_fraction, ds_weights.normal_power_fraction, ds_weights.sport_power_fraction,
+            ds_weights.min_torque_fraction, ds_weights.max_ds_derate};
+        for (double value : fractions) if (value < 0.0 || value > 1.0) return false;
+        return motor.peak_torque_nm > 0.0 && motor.base_speed_rpm > 0.0 &&
+            motor.max_speed_rpm > motor.base_speed_rpm && motor.efficiency_peak_rpm > 0.0 &&
+            motor.peak_power_kw > 0.0 && motor.max_motor_temp_c > motor.thermal_derating_start_c &&
+            std::isfinite(motor.max_motor_temp_c - motor.thermal_derating_start_c) &&
+            motor.max_inverter_temp_c > motor.inverter_derating_start_c &&
+            std::isfinite(motor.max_inverter_temp_c - motor.inverter_derating_start_c) &&
+            motor.torque_rise_rate_nm_per_s >= 0.0 && motor.torque_fall_rate_nm_per_s >= 0.0 &&
+            battery.max_discharge_power_kw > 0.0 && battery.max_charge_power_kw > 0.0 &&
+            battery.temp_hard_limit_c > battery.temp_soft_limit_c &&
+            std::isfinite(battery.temp_hard_limit_c - battery.temp_soft_limit_c) &&
+            battery.soc_min_normal > battery.soc_min_critical && battery.soc_max_full > battery.soc_max_regen &&
+            overboost_duration_s >= 0.0 && overboost_power_multiplier > 0.0 &&
+            drive_mode >= DriveMode::ECO && drive_mode <= DriveMode::CUSTOM &&
+            regen_mode >= RegenMode::LOW && regen_mode <= RegenMode::ADAPTIVE &&
+            raps_stability_config.validate();
+    }
 };
 
 // ============================================================================
@@ -369,16 +407,22 @@ public:
         // Motor heating
         double motor_heating = motor_power_kw * motor_thermal_resistance_;
         double motor_cooling = (motor_temp_c_ - ambient_temp_c_) / motor_tau_s_;
-        motor_temp_c_ += (motor_heating - motor_cooling) * dt;
+        double next_motor_temp = motor_temp_c_ + (motor_heating - motor_cooling) * dt;
         
         // Inverter heating
         double inv_heating = inverter_loss_kw * inverter_thermal_resistance_;
         double inv_cooling = (inverter_temp_c_ - ambient_temp_c_) / inverter_tau_s_;
-        inverter_temp_c_ += (inv_heating - inv_cooling) * dt;
+        double next_inverter_temp = inverter_temp_c_ + (inv_heating - inv_cooling) * dt;
+
+        if (!std::isfinite(motor_power_kw) || !std::isfinite(inverter_loss_kw) ||
+            !std::isfinite(dt) || dt <= 0.0 || !std::isfinite(next_motor_temp) ||
+            !std::isfinite(next_inverter_temp)) {
+            throw std::domain_error("Nonfinite torque thermal prediction");
+        }
         
         // Clamp to reasonable values
-        motor_temp_c_ = std::clamp(motor_temp_c_, ambient_temp_c_, 200.0);
-        inverter_temp_c_ = std::clamp(inverter_temp_c_, ambient_temp_c_, 150.0);
+        motor_temp_c_ = std::clamp(next_motor_temp, ambient_temp_c_, 200.0);
+        inverter_temp_c_ = std::clamp(next_inverter_temp, ambient_temp_c_, 150.0);
     }
     
     double get_motor_temp() const { return motor_temp_c_; }
@@ -398,6 +442,38 @@ public:
 
 class DSTorqueManager {
 private:
+    static double finite(double value) {
+        if (!std::isfinite(value)) throw std::domain_error("Nonfinite direct torque arithmetic");
+        return value;
+    }
+
+    TorqueResult deny(const char* reason) {
+        TorqueResult result{};
+        result.limp_mode_active = true;
+        result.raps_dsm_tripped = true;
+        result.raps_dsm_trip_reason = reason;
+        result.limiting_factor = reason;
+        // The only history changed by rejection is the zero limit actually emitted.
+        last_torque_limit_nm_ = 0.0;
+        return result;
+    }
+
+    static bool valid_input(const ds::EnhancedState& enhanced, double rpm, double dt,
+                            const ds_plugin::DiagnosticReport* diagnostic) {
+        const auto& state = enhanced.state;
+        const double values[] = {state.voltage, state.current, state.temperature,
+            state.state_of_charge, state.entropy, state.phi_magnitude, state.degradation,
+            enhanced.health.remaining_capacity_percent, enhanced.ds_confidence, rpm, dt};
+        for (double value : values) if (!std::isfinite(value)) return false;
+        for (int i = 0; i < 4; ++i) if (!std::isfinite(state.g_eff(i, i))) return false;
+        return state.voltage > 0.0 && state.state_of_charge >= 0.0 && state.state_of_charge <= 1.0 &&
+            state.entropy >= 0.0 && state.entropy <= 1.0 && state.phi_magnitude >= 0.0 &&
+            state.degradation >= 0.0 && state.degradation <= 1.0 &&
+            enhanced.health.remaining_capacity_percent >= 0.0 && enhanced.health.remaining_capacity_percent <= 100.0 &&
+            enhanced.ds_confidence >= 0.0 && enhanced.ds_confidence <= 1.0 && rpm >= 0.0 && dt > 0.0 &&
+            (!diagnostic || (std::isfinite(diagnostic->voltage_imbalance_mv) && diagnostic->voltage_imbalance_mv >= 0.0));
+    }
+
     TorqueConfig config_;
     TorqueDiagnostics diagnostics_;
     ThermalModel thermal_model_;
@@ -415,8 +491,8 @@ private:
             return target_nm;
         }
         
-        double max_increase = config_.drivetrain.rear_motor.torque_rise_rate_nm_per_s * dt;
-        double max_decrease = config_.drivetrain.rear_motor.torque_fall_rate_nm_per_s * dt;
+        double max_increase = finite(config_.drivetrain.rear_motor.torque_rise_rate_nm_per_s * dt);
+        double max_decrease = finite(config_.drivetrain.rear_motor.torque_fall_rate_nm_per_s * dt);
         
         double delta = target_nm - current_nm;
         
@@ -435,9 +511,9 @@ private:
         if (rpm >= motor.max_speed_rpm) return 0.0;
         
         // Constant power region: T = P / ω
-        double power_w = motor.peak_power_kw * 1000.0;
-        double omega = 2.0 * M_PI * rpm / 60.0;
-        double power_limited_torque = power_w / omega;
+        double power_w = finite(motor.peak_power_kw * 1000.0);
+        double omega = finite(2.0 * M_PI * rpm / 60.0);
+        double power_limited_torque = finite(power_w / omega);
         
         return std::min(motor.peak_torque_nm, power_limited_torque);
     }
@@ -473,7 +549,7 @@ private:
     
     // DS metric stress scaling
     double compute_metric_scaling(const ds::EnhancedState& enhanced) const {
-        double trace = enhanced.state.g_eff.trace();
+        double trace = finite(enhanced.state.g_eff.trace());
         double deviation = std::abs(trace - 2.0); // 2.0 is "relaxed" state
         
         // Higher deviation = more structural stress
@@ -494,40 +570,41 @@ private:
         
         // Battery thermal derating
         if (battery_temp >= config_.battery.temp_soft_limit_c) {
-            double alpha = (battery_temp - config_.battery.temp_soft_limit_c) /
+            double alpha = finite(finite(battery_temp - config_.battery.temp_soft_limit_c) /
                           (config_.battery.temp_hard_limit_c - 
-                           config_.battery.temp_soft_limit_c);
+                           config_.battery.temp_soft_limit_c));
             alpha = std::clamp(alpha, 0.0, 1.0);
             scaling *= (1.0 - 0.6 * alpha); // Up to 60% reduction
         }
         
         // Cold battery derating
         if (battery_temp < config_.battery.temp_cold_limit_c) {
-            double cold_factor = std::max(0.5, battery_temp / 
-                                         config_.battery.temp_cold_limit_c);
+            // Preserve the default below-zero 50% taper without dividing by zero.
+            double cold_factor = config_.battery.temp_cold_limit_c == 0.0 ? 0.5 :
+                std::max(0.5, finite(battery_temp / config_.battery.temp_cold_limit_c));
             scaling *= cold_factor;
         }
         
         // Motor thermal derating
         const auto& motor_cfg = config_.drivetrain.rear_motor;
         if (motor_temp >= motor_cfg.thermal_derating_start_c) {
-            double m_alpha = (motor_temp - motor_cfg.thermal_derating_start_c) /
+            double m_alpha = finite(finite(motor_temp - motor_cfg.thermal_derating_start_c) /
                             (motor_cfg.max_motor_temp_c - 
-                             motor_cfg.thermal_derating_start_c);
+                             motor_cfg.thermal_derating_start_c));
             m_alpha = std::clamp(m_alpha, 0.0, 1.0);
             scaling *= (1.0 - 0.5 * m_alpha);
         }
         
         // Inverter thermal derating
         if (inverter_temp >= motor_cfg.inverter_derating_start_c) {
-            double i_alpha = (inverter_temp - motor_cfg.inverter_derating_start_c) /
+            double i_alpha = finite(finite(inverter_temp - motor_cfg.inverter_derating_start_c) /
                             (motor_cfg.max_inverter_temp_c - 
-                             motor_cfg.inverter_derating_start_c);
+                             motor_cfg.inverter_derating_start_c));
             i_alpha = std::clamp(i_alpha, 0.0, 1.0);
             scaling *= (1.0 - 0.4 * i_alpha);
         }
         
-        return std::max(0.3, scaling);
+        return std::max(0.3, finite(scaling));
     }
     
     // SOC-based scaling
@@ -628,9 +705,9 @@ private:
         }
         
         // Power-limited regen
-        double regen_power_limit = config_.battery.max_charge_power_kw * 1000.0;
-        double omega = 2.0 * M_PI * std::max(motor_rpm, 100.0) / 60.0;
-        double power_limited_regen = regen_power_limit / omega;
+        double regen_power_limit = finite(config_.battery.max_charge_power_kw * 1000.0);
+        double omega = finite(2.0 * M_PI * std::max(motor_rpm, 100.0) / 60.0);
+        double power_limited_regen = finite(regen_power_limit / omega);
         
         double regen_limit = std::min(base_regen, power_limited_regen);
         regen_limit *= regen_scale * mode_factor;
@@ -674,6 +751,7 @@ public:
           overboost_timer_s_(0.0),
           time_since_init_s_(0.0),
           initialized_(true) {
+        if (!config.validate()) throw std::invalid_argument("Invalid direct torque configuration");
         diagnostics_.reset();
     }
     
@@ -682,6 +760,7 @@ public:
     // ========================================================================
     
     void init(const TorqueConfig& config) {
+        if (!config.validate()) throw std::invalid_argument("Invalid direct torque configuration");
         config_ = config;
         initialized_ = true;
         diagnostics_.reset();
@@ -693,10 +772,12 @@ public:
     }
     
     void set_drive_mode(DriveMode mode) {
+        if (mode < DriveMode::ECO || mode > DriveMode::CUSTOM) throw std::invalid_argument("Invalid drive mode");
         config_.drive_mode = mode;
     }
     
     void set_regen_mode(RegenMode mode) {
+        if (mode < RegenMode::LOW || mode > RegenMode::ADAPTIVE) throw std::invalid_argument("Invalid regen mode");
         config_.regen_mode = mode;
     }
     
@@ -715,6 +796,36 @@ public:
         if (!initialized_) {
             throw std::runtime_error("DSTorqueManager not initialized");
         }
+        if (!valid_input(enhanced, motor_speed_rpm, dt, pack_diagnostics)) return deny("INVALID_INPUT");
+        // Compute on a copy: thermal, filter, timer and diagnostic histories commit together.
+        auto candidate = *this;
+        TorqueResult result;
+        try {
+            result = candidate.compute_torque_limit_candidate(enhanced, motor_speed_rpm, dt, pack_diagnostics);
+            if (result.raps_dsm_trip_reason == "INVALID_INPUT" || result.raps_dsm_trip_reason == "NUMERICAL_FAILURE") {
+                return deny(result.raps_dsm_trip_reason.c_str());
+            }
+            finite(result.max_drive_torque_nm);
+            finite(result.max_regen_torque_nm);
+            finite(result.max_power_kw);
+            finite(candidate.thermal_model_.get_motor_temp());
+            finite(candidate.thermal_model_.get_inverter_temp());
+            finite(candidate.time_since_init_s_);
+            finite(candidate.overboost_timer_s_);
+            finite(candidate.diagnostics_.total_time_s);
+            finite(candidate.diagnostics_.average_torque_nm);
+            finite(candidate.diagnostics_.average_ds_scaling);
+            finite(candidate.diagnostics_.total_derate_time_s);
+        } catch (const std::domain_error&) {
+            return deny("NUMERICAL_FAILURE");
+        }
+        *this = std::move(candidate);
+        return result;
+    }
+
+private:
+    TorqueResult compute_torque_limit_candidate(const ds::EnhancedState& enhanced,
+        double motor_speed_rpm, double dt, const ds_plugin::DiagnosticReport* pack_diagnostics) {
         
         auto start_time = std::chrono::high_resolution_clock::now();
         
@@ -791,13 +902,13 @@ public:
         double mode_fraction = get_drive_mode_fraction();
 
         // --- 8. Combine all scaling factors ---
-        double combined_scaling = result.base_motor_scaling *
+        double combined_scaling = finite(result.base_motor_scaling *
                                  result.ds_scaling *
                                  result.thermal_scaling *
                                  result.soc_scaling *
                                  result.cell_balancing_scaling *
                                  result.raps_membrane_scaling *
-                                 mode_fraction;
+                                 mode_fraction);
         
         // Apply protection limits
         combined_scaling = std::clamp(combined_scaling,
@@ -819,7 +930,7 @@ public:
                 result.overall_scaling > 0.9 && // Only if not already limited
                 enhanced.state.temperature < config_.battery.temp_soft_limit_c) {
                 
-                combined_scaling *= config_.overboost_power_multiplier;
+                combined_scaling = finite(combined_scaling * config_.overboost_power_multiplier);
                 result.overboost_active = true;
                 overboost_timer_s_ += dt;
             }
@@ -829,15 +940,15 @@ public:
         }
         
         // --- 9. Compute final drive torque ---
-        double target_torque = base_torque * combined_scaling;
+        double target_torque = finite(base_torque * combined_scaling);
         
         // Smooth recovery without exceeding this cycle's protective envelope.
         target_torque = std::min(target_torque,
             torque_rate_limiter(target_torque, last_torque_limit_nm_, dt));
         
         // Power limit check
-        double omega = 2.0 * M_PI * motor_speed_rpm / 60.0;
-        double power_w = target_torque * omega;
+        double omega = finite(2.0 * M_PI * motor_speed_rpm / 60.0);
+        double power_w = finite(target_torque * omega);
         double power_kw = power_w / 1000.0;
         
         if (power_kw > config_.battery.max_discharge_power_kw) {
@@ -866,8 +977,8 @@ public:
         }
         
         // --- 12. Update thermal model ---
-        double motor_power_loss = result.max_power_kw * 
-            (1.0 - motor.efficiency_peak_rpm / std::max(motor_speed_rpm, 1.0)) * 0.1;
+        double motor_power_loss = finite(result.max_power_kw *
+            (1.0 - motor.efficiency_peak_rpm / std::max(motor_speed_rpm, 1.0)) * 0.1);
         double inverter_loss = result.max_power_kw * 0.02; // 2% inverter loss
         thermal_model_.update(result.max_power_kw, 
                              motor_power_loss + inverter_loss, dt);
@@ -876,6 +987,10 @@ public:
         result.health_derate_active = (result.health_scaling < 0.95);
         result.limiting_factor = determine_limiting_factor(result);
         
+        if (diagnostics_.update_count == std::numeric_limits<int>::max() ||
+            diagnostics_.derate_event_count == std::numeric_limits<int>::max()) {
+            throw std::domain_error("Direct torque diagnostic counter overflow");
+        }
         diagnostics_.update_count++;
         diagnostics_.total_time_s += dt;
         diagnostics_.average_torque_nm = 
@@ -905,6 +1020,7 @@ public:
         return result;
     }
     
+public:
     // ========================================================================
     // QUERY METHODS
     // ========================================================================

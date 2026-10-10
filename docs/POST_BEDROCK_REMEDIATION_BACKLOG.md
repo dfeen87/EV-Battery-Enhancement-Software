@@ -1,14 +1,16 @@
 # Post-BEDROCK remediation backlog
 
-This backlog records remaining findings demonstrated against the v8.0.0 BEDROCK
-implementation during the post-BEDROCK review. It is an engineering work queue,
+This backlog records findings demonstrated against the v8.0.0 BEDROCK
+implementation and the reviewed v8.0.1 PR baseline. It is an engineering work queue,
 not a claim of automotive certification or a complete hazard analysis.
 
-The three selected repair workstreams are raw BMS fault preservation, current
+The initial three repair workstreams are raw BMS fault preservation, current
 drive/regen ceilings taking precedence over transition smoothing, and malformed
 C++/Python governor evidence. The review is limited to two focused review-and-repair
-iterations. The entries below are outside those corrections; proposed regression
-tests are requirements for subsequent work, not reported passing tests.
+iterations. The follow-up on the same PR addresses PB-04, PB-05, and PB-07 with
+one independent review and at most one focused corrective iteration. Resolved
+entries retain their original reproduction evidence; tests on other entries remain
+requirements for subsequent work, not reported passing tests.
 
 Severity describes the software boundary and potential consequence. Physical
 consequences have not been verified. Reproductions use synthetic in-process values
@@ -60,7 +62,7 @@ compatible where possible. Add failing regressions before each correction.
 - **Required regressions:** Below, exactly at, and above `tau_min`; changed voltage/SOC; repeated short steps; state, time, energy, and stability consistency.
 - **Dependencies:** Review existing simulation short-step expectations before choosing the compatible behavior; PB-02 alone does not resolve the early return.
 
-## PB-04 — Direct RAPS, torque, and regen paths accept NaN temperature
+## PB-04 — Direct RAPS, torque, and regen paths accept NaN temperature — resolved
 
 - **Severity / confidence:** High; confirmed outside the repaired governor boundary.
 - **File / functions:** `include/raps_ev_stability_membrane.hpp`, `raps::ev::RapsEVStabilityMembrane::evaluate`; `include/torque_enhancement.hpp`, `ds::drive::DSTorqueManager::compute_torque_limit`; `include/ds_regen_braking_manager_v1.hpp`, `ds::drive::DSRegenBrakingManager::compute_regen_limit`.
@@ -69,8 +71,11 @@ compatible where possible. Add failing regressions before each correction.
 - **Minimal correction:** Validate consumed sensor/state values and timestep before filter mutation; return a deterministic denied result for malformed evidence. Validate any configuration domains needed for those calculations without changing valid policies.
 - **Required regressions:** NaN/infinity and extreme finite consumed fields on direct paths; zero authority and no history contamination after failure; normal thermal/current filtering and recovery.
 - **Dependencies:** Preserve the repaired protection-ceiling/slew ordering; coordinate common RAPS handling with both direct managers.
+- **8.0.1 correction / evidence:** Direct entry points validate consumed finite values, domains, positive timesteps, and configuration denominators before calculation. RAPS and drive compute candidates; regen stages RAPS/ABS history. Invalid or overflowing candidates emit finite zero authority with an explicit denial reason, retain accepted numeric filter/thermal/timer histories, and anchor command recovery at emitted zero. Returned diagnostics identify denial; regen also publishes it through its diagnostics getter. NaN temperature now produces a RAPS trip with stability `0`, drive `0 Nm`, and regen `0 Nm`. `test_direct_numeric_boundaries` and `test_regen_boundaries` cover NaN/Inf, finite overflow, malformed configuration, rejection history, and ordinary valid operation. The direct suite initially failed 136 checks and the regen suite 148 checks before correction. The governed wrapper's newly reachable RAPS numerical rejection also refreshes zero-trust/Level 3 audit evidence; `test_ailee_governor` first failed its zero-trust assertion and now passes.
+- **Scope:** Existing valid physical derating policies remain configured software policies, not guarantees of physical safety. A manager cannot recover raw readings from a normalized `EnhancedState`; callers must provide original middleware diagnostics for raw faults. Independent hardware evidence and model-epoch consistency remain outside this correction.
+- **Independent corrective iteration:** A finite `DBL_MAX` torque command with matching finite electrical HP and warmed RAPS filters could overflow the governed boost ceiling to `inf` at Level 0 / trust 1. A failing `test_ailee_governor` regression precedes guards for boost/HP-to-torque/applied-HP arithmetic and staged RAPS history. The final repro emits Level 3 / trust 0 / finite zero limits, and recovery matches an unchanged reference. The independent reviewer verified the fix. Final direct numerical regression source: 285 failures against baseline headers, 295 checks pass after repair.
 
-## PB-05 — Regen ignores a configured power ceiling and replaces voltage policy
+## PB-05 — Regen ignores a configured power ceiling and replaces voltage policy — resolved
 
 - **Severity / confidence:** High; confirmed.
 - **File / functions:** `include/ds_regen_braking_manager_v1.hpp`, `ds::drive::DSRegenBrakingManager::compute_regen_limit` and `diag_pack_max_voltage`.
@@ -79,6 +84,9 @@ compatible where possible. Add failing regressions before each correction.
 - **Minimal correction:** Apply the configured power ceiling using validated speed and explicit physical units; keep the configured voltage limit authoritative when diagnostics carry no replacement limit.
 - **Required regressions:** Power caps across motor speeds including zero/near-zero speed; restrictive configured voltages with/without identical diagnostics; limits composed with SOC, thermal, ABS, RAPS, and slew protections.
 - **Dependencies:** PB-04 input validation; preserve configured derating policies and the existing mechanical/electrical efficiency distinction.
+- **8.0.1 correction / evidence:** `max_regen_power_kw` caps mechanical power using `P_kW = T_Nm * RPM * 2*pi/60000`; angular-speed conversion and conditional division avoid overflow and division by zero. The original `1 kW` / `30000 RPM` case now emits `0.183028 Nm`, or `0.575 kW` after existing RAPS derating. `pack_voltage_max_fallback_v` remains authoritative because diagnostics contain no alternative maximum. The `410 V` configured / `409 V` measured case emits `0 Nm` both with and without diagnostics. A sub-1 V configured voltage regression also prevents the former voltage-policy bypass. `test_regen_boundaries` covers zero/near-zero/extreme/nonfinite RPM, zero power, voltage equality/taper/hard stop, immediate power reductions, and rejection after accepted ABS history.
+- **Scope:** Zero RPM retains the prior optional-speed contract: supplied angular frequency is zero, torque remains bounded by other ceilings, and no division occurs. Positive-speed power enforcement requires actual RPM from the caller; this software does not prove rotor speed or electrical recovery efficiency. No replacement voltage-policy field or external freshness guarantee is invented.
+- **Independent corrective iteration:** RPM `7e-320`, power ceiling `2*denorm_min` (`9.88131e-324 kW`), and warmed filters emitted about `2 Nm` / `1.48220e-323 kW`; RPM `1e-320` also lost the conversion entirely. Zero or subnormal power-conversion factors for positive RPM now deny with finite zero authority without advancing accepted history. The new regression failed 10 checks before this correction and passes afterward; the independent reviewer verified both cases.
 
 ## PB-06 — Configured lower-temperature and SOC limits are unused
 
@@ -90,7 +98,7 @@ compatible where possible. Add failing regressions before each correction.
 - **Required regressions:** Configured and default lower-temperature/SOC boundaries, current direction, zero current, and exact equality; verify applicable restrictions without changing normal behavior.
 - **Dependencies:** Build on raw fault preservation; review consumers of `safety_fault` so advisory recommendations are not misrepresented as actuator shutdown.
 
-## PB-07 — BMS adapter authorizes missing or rejected-cycle evidence
+## PB-07 — BMS adapter authorizes missing or rejected-cycle evidence — resolved at adapter boundary
 
 - **Severity / confidence:** High; confirmed in the reference adapter.
 - **File / functions:** `include/ailee_trust_layer/ailee_adapters.hpp`, `ailee::ev::adapters::BMSMiddlewareAdapter::initialize`, `update_cycle`, and `evaluate`.
@@ -99,6 +107,8 @@ compatible where possible. Add failing regressions before each correction.
 - **Minimal correction:** Track successful-cycle availability and rejected-cycle status at the adapter boundary; return invalid/zero-trust protective evidence until a successful current cycle exists. Preserve the core's last-known-good state for inspection.
 - **Required regressions:** Before initialization, after initialization without a cycle, successful cycle, rejected cycle, and subsequent successful recovery; verify trust-gate decisions and availability metadata.
 - **Dependencies:** Raw fault preservation is necessary but does not supply cycle availability; avoid silently resetting useful diagnostic history.
+- **8.0.1 correction / evidence:** A private availability flag starts false, clears on initialization/reset and before every attempted update, and becomes true only after `enhance_cycle` returns. Unavailable evaluation and the recommendation getter return Level 3; telemetry has health/trust `0`, anomaly true, and an explicit missing-successful-update reason. Middleware exceptions propagate and its last good model remains intact. `test_bms_adapter_evidence` has 42 failing checks against reviewed head `b0558bc`, then passes after correction, including missing evidence, rejected latest cycle, finite-overflow rejection, recovery, reset, and TrustGate learning denial.
+- **Scope:** Availability proves only successful completion of the latest adapter-observed middleware call. Repeated evaluation is allowed until the next update attempt; no timestamp or external sensor-freshness claim is made. PB-03's sub-minimum timestep/model-epoch defect remains open and is not concealed by this flag.
 
 ## PB-08 — Hardware adapter treats future and NaN clock evidence as fresh
 

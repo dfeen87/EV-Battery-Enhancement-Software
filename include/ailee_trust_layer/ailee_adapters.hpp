@@ -93,17 +93,31 @@ public:
     }
 
     bool initialize() noexcept override {
+        cycle_evidence_available_ = false;
         bms_middleware_.init(75.0, 400.0);
         return true;
     }
 
     void update_cycle(double voltage, double current, double temperature, double soc, double dt) {
+        // A rejected latest attempt must not authorize using an earlier cycle.
+        // Middleware retains its last-known-good model; availability is separate.
+        cycle_evidence_available_ = false;
         bms_middleware_.enhance_cycle(voltage, current, temperature, soc, dt);
+        cycle_evidence_available_ = true;
     }
 
     CompartmentTelemetry evaluate(double dt) noexcept override {
         (void)dt;
         CompartmentTelemetry t;
+        if (!cycle_evidence_available_) {
+            t.health_score = 0.0;
+            t.trust_score = 0.0;
+            t.anomaly_detected = true;
+            t.recommended_level = GovernanceLevel::LEVEL_3_PROTECTIVE;
+            snprintf(t.status_message.data, sizeof(t.status_message.data),
+                "BMS cycle evidence unavailable; no successful latest update.");
+            return t;
+        }
         auto diag = bms_middleware_.get_diagnostics();
         t.health_score = diag.pack_health_percent / 100.0;
         t.trust_score = diag.safety_fault ? 0.0 : (diag.pack_health_percent / 100.0);
@@ -114,6 +128,7 @@ public:
     }
 
     GovernanceLevel get_recommended_governance_level() const noexcept override {
+        if (!cycle_evidence_available_) return GovernanceLevel::LEVEL_3_PROTECTIVE;
         auto diag = bms_middleware_.get_diagnostics();
         if (diag.safety_fault || diag.thermal_warning) {
             return GovernanceLevel::LEVEL_3_PROTECTIVE;
@@ -127,6 +142,8 @@ public:
 
 private:
     ds_plugin::DSBMSMiddleware bms_middleware_;
+    // Records middleware-call completion, not sensor freshness or model epochs.
+    bool cycle_evidence_available_ = false;
 };
 
 /**

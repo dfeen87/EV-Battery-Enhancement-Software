@@ -5,11 +5,13 @@
 The reviewed baseline is v8.0.0 at
 `d6748b9fc6d5036b357348f8555b3acbbcef1f10`. The working tree was clean before
 investigation. [The BEDROCK report](RELEASE_8.0.0.md) and historical simulation
-observations remain unchanged. This pass selects three demonstrated defects in
-executed software boundaries; remaining demonstrated findings are recorded in
+observations remain unchanged. The initial pass selects three demonstrated defects
+in executed software boundaries. The follow-up on PR #38 builds on reviewed head
+`b0558bcbb2157a129a4218d2d5f79904a0ed08d2` and addresses PB-04, PB-05, and PB-07;
+remaining demonstrated findings are recorded in
 [the remediation backlog](POST_BEDROCK_REMEDIATION_BACKLOG.md).
 
-**SemVer: PATCH, 8.0.1.** Public C++ signatures and result layouts remain compatible.
+**SemVer: PATCH, 8.0.1.** Public C++ call signatures and result layouts remain compatible.
 DS mathematics, configured four-level percentage envelopes, subsystem ownership,
 and ordinary upward slew limits remain intact. Invalid or incomplete governance
 evidence now produces finite zero authority, consistent with the existing
@@ -45,7 +47,7 @@ bus, and fleet parameter distribution remain proposed in
 controls. This review makes no binary/API equivalence claim with an upstream
 AILEE artifact; the local Trust Contract 9.4 target remains distinct.
 
-## Three selected defects and regression evidence
+## Initial three selected defects and regression evidence
 
 Selection prioritizes fault significance, deterministic reproduction, and actual
 execution paths over unconnected reference features. Each regression was added
@@ -67,7 +69,7 @@ The existing RAPS test fixture also used an uninitialized `EnhancedState` member
 preventing a strict GCC 14 Release build. Value-initializing the fixture restores
 the build without changing assertions or suppressing compiler diagnostics.
 
-## Reproducible validation
+## Initial validation and reproducible commands
 
 Use C++17, GCC 14.2, CMake 3.31.10, and Python 3.12.14. CI defaults disable
 FEEN, GPU, and the optional embedded Python governor. C++ test targets retain
@@ -160,6 +162,119 @@ optional checks with `DS_ENABLE_PYTHON_GOVERNOR=ON`, that library path when need
 and `PYTHONPATH=<temporary-source-copy>/ds_core/python` so the tests exercise the
 real embedded module. They ran with bytecode disabled and audit output confined to
 the temporary copy. FEEN/GPU and unrelated hardware paths were not enabled.
+
+## PR #38 protection-boundary follow-up
+
+The follow-up starts from a clean tree at `b0558bc`, identical to the open draft
+PR's head. Before edits, all default targets rebuild with strict C++17 Release
+warnings, all 9 registered CTest tests pass, and all 11 automotive Python tests
+pass. The three selected backlog reproductions remain present at that baseline.
+Existing passing tests and the initial v8.0.1 corrections are retained.
+
+| Finding | Before | After and regression |
+|---|---|---|
+| PB-04, direct invalid numeric evidence | NaN temperature: RAPS reports no trip/stability 1; direct drive allows 340 Nm; regen allows 143.75 Nm with temperature factor 1. | RAPS reports an invalid-input trip/stability 0; both managers emit 0 Nm with an explicit denial reason. `test_direct_numeric_boundaries` and `test_regen_boundaries` cover nonfinite consumed inputs, domains, positive dt, malformed configurations, derived overflow, and accepted history after rejection. |
+| PB-05, power ceiling | `max_regen_power_kw=1`, 30000 RPM: 143.75 Nm represents 451.604 kW. | 0.183028 Nm represents 0.575 kW, below the configured 1 kW ceiling after the existing RAPS factor. Zero/near-zero/extreme speed and immediate tightening/recovery are covered by `test_regen_boundaries`. |
+| PB-05, voltage precedence | Configured 410 V maximum, measured 409 V: 0 Nm without diagnostics, 143.75 Nm with diagnostics. | 0 Nm in both paths. Configured taper/hard-stop boundaries and a sub-1 V voltage-policy bypass have regression coverage. |
+| PB-07, adapter evidence | Construction/initialization and a rejected latest cycle allow trust 1 / Level 0; TrustGate permits learning. | Missing, reset, or rejected latest-attempt evidence gives health/trust 0, anomaly true, Level 3, and no learning authorization. A genuine successful update restores the existing healthy or physical-fault policy. `test_bms_adapter_evidence` covers these transitions and unchanged-model recovery. |
+| PB-04 direct dependency, governed RAPS rejection | After RAPS numerical hardening, a finite `-DBL_MAX` temperature overflows its derivative: applied torque is 0, but output trust is 1 and latest governor audit is Level 0 / trust 1. | `DSAileeTorqueManager::processTorqueCommand` treats RAPS input/numerical rejection as unavailable authorization evidence before governor evaluation. Output and latest audit both become Level 3 / trust 0 / finite zero authority. `test_ailee_governor` verifies rejection and ordinary recovery. Physical RAPS fault policy is retained. |
+
+Changes are confined to `RapsEVStabilityMembrane::evaluate`/initialization in
+`include/raps_ev_stability_membrane.hpp`, direct `DSTorqueManager` validation and
+candidate computation (including its consumed `ThermalModel::update`) in
+`include/torque_enhancement.hpp`, `DSRegenBrakingManager` in
+`include/ds_regen_braking_manager_v1.hpp`, `BMSMiddlewareAdapter` in
+`include/ailee_trust_layer/ailee_adapters.hpp`, and the governed wrapper above.
+The three new CTest targets are registered in CMake. Public call signatures,
+result layouts, valid governance percentages, and DS equations are unchanged.
+Malformed configurations now throw `std::invalid_argument` before initialization
+mutates active state. RAPS adds diagnostic `INVALID_INPUT` and
+`NUMERICAL_FAILURE` enum values after the existing values. Private header-only
+manager/adapter storage changes require consumers to rebuild; this is source
+compatibility, not an independent binary compatibility claim.
+
+Rejected numeric candidates preserve accepted filter, thermal, timer, and ABS
+recovery history. The emitted command history records zero so recovery ramps from
+the denied limit. Regen publishes rejection diagnostics separately from its
+accepted stability filter. Tighter power, voltage, battery-acceptance, and pedal
+ceilings remain immediate; upward slew/recovery policies remain intact. A
+600-cycle differential comparison of valid direct drive inputs (RAPS enabled and
+disabled, temperatures -10..59 C, SOC 0..1, RPM 0..16000, signed current, and three
+positive timesteps) produces identical numeric outputs, thermal state, and
+diagnostics before and after.
+
+The power calculation is mechanical: `P_kW = T_Nm * RPM * 2*pi/60000`, equivalent
+to `T_Nm * omega_rad_per_s / 1000`. It does not assume electrical recovery
+efficiency. Zero RPM preserves the documented optional-speed behavior, avoids
+division, and retains the other torque/acceptance ceilings; zero configured power
+disables regen even then. Actual positive-speed enforcement requires a truthful
+RPM input. `pack_voltage_max_fallback_v` keeps its compatible name but is always
+authoritative because `DiagnosticReport` carries no replacement maximum. A
+diagnostic safety fault can tighten protection, never relax this ceiling.
+
+Adapter availability records completion of the latest observed middleware call.
+It clears before each attempt and on initialization/reset; a thrown update leaves
+it unavailable while preserving middleware last-good state. It does not prove
+external sensor freshness or a new model epoch. Repeated evaluation does not
+invent an update. PB-03's short-timestep model inconsistency remains open.
+
+### Independent review and the single corrective iteration
+
+The complete PR diff against BEDROCK was independently inspected after the initial
+follow-up repairs. Two additional numeric cases were demonstrated, regressed
+before correction, and resolved together in one focused corrective iteration:
+
+- With `max_regen_power_kw=2*denorm_min` (`9.88131e-324 kW`) and RPM `7e-320`,
+  a positive subnormal conversion factor allowed about `2 Nm`, representing
+  `1.48220e-323 kW` after 1000 accepted cycles. A zero-conversion variant at RPM
+  `1e-320` likewise bypassed the cap. Positive RPM whose kW/Nm conversion is zero
+  or subnormal now gives `NUMERICAL_FAILURE`, torque/power `0`, and unchanged
+  accepted history. Explicit RPM `0` retains its separate compatible contract.
+  The new regression first failed 10 checks, then passed.
+- Finite `DBL_MAX` requested torque at RPM `1`, with matching finite electrical
+  horsepower and warmed RAPS history, reached a `1.2` boost and published an
+  infinite authorized torque ceiling at Level 0 / trust 1. Governed boost,
+  HP-to-torque, and applied-HP arithmetic are now checked; rejected candidates
+  return Level 3 / trust 0 / finite zero authority and zero audit limits. RAPS
+  history commits only after numerically valid output or a valid physical DSM
+  decision. The new governor regression first failed its protective-level
+  assertion, then passed, including recovery against an unchanged reference.
+
+The independent reviewer rebuilt and reran all three adversarial reproductions
+and both complete focused suites against the final code. Each reproduction now
+emits finite zero authority; no unresolved regression was identified in the
+selected boundaries. The direct numerical suite's final source has 285 failing
+checks against reviewed baseline headers and 295 passing checks after repair;
+the adapter suite has 42 failures against baseline and passes after repair.
+
+### Follow-up validation results
+
+All outcomes below refer to the final follow-up implementation, after that
+corrective iteration. No test assertions, warnings, or CI gates were weakened.
+
+| Check | Outcome |
+|---|---|
+| Strict C++17 Release, all default targets | Passed; **12/12 CTest tests passed** |
+| Debug ASan/UBSan, all default targets | Passed; **12/12 CTest tests passed**, no sanitizer diagnostics |
+| Optional embedded Python governor, all configured targets and pybind | Passed; **12/12 CTest tests passed**, including malformed-result injection and governed numerical rejection |
+| Full Python discovery in temporary source copy | **18 passed, 2 errors, 0 skipped**; the two installer/rollback tests fail because `sudo` is unavailable, before deployment executes |
+| Automotive Python regressions | All **11 passed** within full discovery |
+| CLI / ctypes | Version 8.0.1, finite normal JSON, invalid SOC/dt rejection, and ctypes rejected-cycle recovery equivalence passed |
+| Simulations / REST example | Release and Debug `basic_integration`, Release RAPS demo, REST health and six populated finite JSON endpoints passed |
+| Python syntax checks | Main interfaces, tests, and Python scripts passed |
+| `make verify` / cppcheck | Nonzero, unchanged baseline: 52 `uninitMemberVarNoCtor`, 4 `returnByReference`, 1 `throwInEntryPoint`; host checks are not reached |
+| Repository and targeted clang-tidy | Both exit 0. Repository invocation reports one default-suppressed non-user-code warning; targeted governed source and three new C++ regression files report five such warnings using the Release compilation database |
+| Final diff / historical artifacts | Whitespace check passed; v8.0.0 release report, historical simulation observations, and tracked BEDROCK CLI binary unchanged |
+
+Hosted CI for the earlier implementation is historical evidence above, not proof
+of this follow-up head. The existing PR remains a draft for human review; hosted
+results for the follow-up must be checked after its branch is pushed.
+
+**Version remains PATCH 8.0.1:** these changes enforce existing finite-evidence,
+fail-closed, configured-ceiling, and current-cycle authorization contracts.
+They introduce no new operating feature or breaking public call signature.
+Historical v8.0.0 evidence remains unchanged; no release, binary artifact, or
+deployment is published.
 
 ## Assurance boundaries
 

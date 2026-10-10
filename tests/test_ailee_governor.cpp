@@ -117,6 +117,78 @@ void test_rejected_command_updates_audit_decision() {
     assert(manager.getLastGovernanceDecision().reason == rejected.reason);
 }
 
+void test_raps_numerical_rejection_updates_audit_decision() {
+    ds::drive::DSAileeTorqueManager manager;
+    ds::drive::TorqueCommand command;
+    command.requested_torque_nm = 300.0;
+    command.motor_rpm = 4000.0;
+    command.v_batt = 380.0;
+    command.i_batt = 350.0;
+    command.ctx.soc = 85.0;
+    command.ctx.soh = 95.0;
+    command.ctx.temp_c = 30.0;
+    assert(manager.processTorqueCommand(command).governance_level == 0);
+
+    // Raw fields and horsepower are finite; the RAPS thermal derivative overflows.
+    command.ctx.temp_c = -std::numeric_limits<double>::max();
+    const auto rejected = manager.processTorqueCommand(command);
+    assert(rejected.governance_level == 3);
+    assert(rejected.trust_score == 0.0);
+    assert(rejected.applied_torque_nm == 0.0);
+    assert(rejected.applied_hp == 0.0);
+    assert(rejected.max_allowed_current_a == 0.0);
+    assert(rejected.raps_dsm_trip_reason == "NUMERICAL_FAILURE");
+    assert_rejected(manager.getLastGovernanceDecision());
+    assert(manager.getLastGovernanceDecision().reason == rejected.reason);
+
+    command.ctx.temp_c = 30.0;
+    const auto recovered = manager.processTorqueCommand(command);
+    assert(recovered.governance_level == 0);
+    assert(recovered.applied_torque_nm > 0.0);
+    assert(!recovered.raps_dsm_tripped);
+}
+
+void test_governed_boost_overflow_rejects_candidate() {
+    ds::drive::DSAileeTorqueManager manager, reference;
+    raps::ev::RapsEVStabilityMembrane shadow;
+    ds::drive::TorqueCommand command;
+    command.requested_torque_nm = std::numeric_limits<double>::max();
+    command.motor_rpm = 1.0;
+    command.v_batt = 400.0;
+    const double hp = AileeHorsepowerGovernor::computeMechanicalHp(command.requested_torque_nm, 1.0);
+    command.i_batt = hp / (0.4 * 1.34102);
+    command.ctx.soc = 80.0;
+    command.ctx.soh = 90.0;
+    command.ctx.temp_c = 25.0;
+    for (int step = 0; step < 1000; ++step) {
+        assert(std::isfinite(manager.processTorqueCommand(command).max_allowed_torque_nm));
+        reference.processTorqueCommand(command);
+        shadow.evaluate(command.v_batt, command.i_batt, command.ctx.temp_c);
+    }
+    command.i_batt = shadow.getState().filtered_current_a;
+    command.ctx.temp_c = 27.0; // Would change accepted thermal history if rejection committed.
+    const auto rejected = manager.processTorqueCommand(command);
+    assert(rejected.governance_level == 3);
+    assert(rejected.trust_score == 0.0);
+    assert(rejected.max_allowed_torque_nm == 0.0);
+    assert(rejected.max_allowed_current_a == 0.0);
+    assert(rejected.applied_torque_nm == 0.0);
+    assert(rejected.applied_hp == 0.0);
+    assert_rejected(manager.getLastGovernanceDecision());
+    assert(manager.getLastGovernanceDecision().reason == rejected.reason);
+
+    command.requested_torque_nm = 300.0;
+    command.motor_rpm = 4000.0;
+    command.i_batt = 350.0;
+    command.v_batt = 380.0;
+    command.ctx.temp_c = 27.6;
+    const auto recovered = manager.processTorqueCommand(command);
+    const auto expected = reference.processTorqueCommand(command);
+    assert(recovered.raps_membrane_stability == expected.raps_membrane_stability);
+    assert(recovered.applied_torque_nm == expected.applied_torque_nm);
+    assert(std::isfinite(recovered.max_allowed_torque_nm));
+}
+
 #ifdef DS_TEST_PYTHON_GOVERNOR
 void test_python_governor_result_validation() {
     AileeHorsepowerGovernor initializer;
@@ -252,6 +324,8 @@ int main() {
         test_ds_torque_manager();
         test_invalid_governance_evidence();
         test_rejected_command_updates_audit_decision();
+        test_raps_numerical_rejection_updates_audit_decision();
+        test_governed_boost_overflow_rejects_candidate();
 #ifdef DS_TEST_PYTHON_GOVERNOR
         test_python_governor_result_validation();
 #endif

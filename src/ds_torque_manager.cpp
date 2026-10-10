@@ -54,8 +54,35 @@ GovernedTorqueOutput DSAileeTorqueManager::processTorqueCommand(const TorqueComm
     signals.i_batt = std::max(0.0, cmd.i_batt);
     signals.ctx = cmd.ctx;
 
-    // Evaluate RAPS Stability Membrane
-    auto raps_state = raps_membrane_.evaluate(signals.v_batt, signals.i_batt, signals.ctx.temp_c);
+    // Stage RAPS history until the complete governed output is numerically valid.
+    auto raps_candidate = raps_membrane_;
+    auto raps_state = raps_candidate.evaluate(signals.v_batt, signals.i_batt, signals.ctx.temp_c);
+
+    const auto reject_numerical = [&](const std::string& reason, bool membrane_rejected) {
+        last_decision_ = GovernanceDecisionCpp{};
+        last_decision_.level = 3;
+        last_decision_.trust_score = 0.0;
+        last_decision_.hp_consistency_score = 0.0;
+        last_decision_.used_fallback = true;
+        last_decision_.reason = reason;
+        GovernedTorqueOutput output;
+        output.governance_level = 3;
+        output.trust_score = 0.0;
+        output.hp_consistency_score = 0.0;
+        output.raps_membrane_stability = 0.0;
+        output.raps_boost_multiplier = 0.0;
+        output.raps_dsm_tripped = membrane_rejected;
+        if (membrane_rejected) output.raps_dsm_trip_reason = raps_state.get_dsm_trip_reason();
+        output.derating_active = true;
+        output.reason = last_decision_.reason;
+        return output;
+    };
+    // Numerical rejection is unavailable authorization evidence, rather than a
+    // valid physical derate. Keep the emitted denial and latest audit consistent.
+    if (raps_state.trip_code == raps::ev::DsmTripReason::INVALID_INPUT ||
+        raps_state.trip_code == raps::ev::DsmTripReason::NUMERICAL_FAILURE) {
+        return reject_numerical(std::string("RAPS_DSM_TRIP: ") + raps_state.get_dsm_trip_reason(), true);
+    }
 
     // Evaluate governance decision from AILEE Trust Layer
     last_decision_ = governor_->evaluate(signals);
@@ -78,6 +105,7 @@ GovernedTorqueOutput DSAileeTorqueManager::processTorqueCommand(const TorqueComm
         output.governance_level = 3;
         output.derating_active = true;
         output.reason = std::string("RAPS_DSM_TRIP: ") + raps_state.get_dsm_trip_reason();
+        raps_membrane_ = raps_candidate;
         return output;
     }
 
@@ -96,8 +124,16 @@ GovernedTorqueOutput DSAileeTorqueManager::processTorqueCommand(const TorqueComm
         output.max_allowed_current_a = last_decision_.governed_discharge_current * raps_state.overall_membrane_stability;
     }
 
+    if (!std::isfinite(governed_hp_base) || !std::isfinite(governed_torque_base) ||
+        !std::isfinite(output.max_allowed_current_a)) {
+        return reject_numerical("NUMERICAL_FAILURE: governed boost arithmetic", false);
+    }
+
     // Calculate maximum allowed torque from governed HP ceiling at current RPM
     double torque_ceiling_from_hp = (governed_hp_base * 7121.23) / signals.rpm;
+    if (!std::isfinite(torque_ceiling_from_hp)) {
+        return reject_numerical("NUMERICAL_FAILURE: governed HP-to-torque arithmetic", false);
+    }
     output.max_allowed_torque_nm = std::min(governed_torque_base, torque_ceiling_from_hp);
 
     // Apply level-based derating and clamp requested torque to governed limit
@@ -108,7 +144,11 @@ GovernedTorqueOutput DSAileeTorqueManager::processTorqueCommand(const TorqueComm
 
     // Calculate applied mechanical horsepower
     output.applied_hp = AileeHorsepowerGovernor::computeMechanicalHp(output.applied_torque_nm, signals.rpm);
+    if (!std::isfinite(output.applied_hp)) {
+        return reject_numerical("NUMERICAL_FAILURE: applied horsepower arithmetic", false);
+    }
 
+    raps_membrane_ = raps_candidate;
     return output;
 }
 
