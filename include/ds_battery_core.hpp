@@ -65,7 +65,7 @@ namespace ds {
 
 constexpr int DS_VERSION_MAJOR = 8;
 constexpr int DS_VERSION_MINOR = 0;
-constexpr int DS_VERSION_PATCH = 0;
+constexpr int DS_VERSION_PATCH = 1;
 
 inline std::string get_version_string() {
     return std::to_string(DS_VERSION_MAJOR) + "." +

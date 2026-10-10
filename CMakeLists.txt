@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.15)
 
 project(
     DS_Battery_Enhancement
-    VERSION 8.0.0
+    VERSION 8.0.1
     DESCRIPTION "DS Theory Battery Management & BMS Middleware"
     LANGUAGES CXX
 )
@@ -186,8 +186,31 @@ if(DS_BUILD_TESTS)
     add_test(NAME test_middleware COMMAND test_middleware)
     ds_enable_test_assertions(test_middleware)
 
+    add_executable(test_protection_envelopes tests/test_protection_envelopes.cpp)
+    target_link_libraries(test_protection_envelopes PRIVATE ds_battery)
+    add_test(NAME test_protection_envelopes COMMAND test_protection_envelopes)
+    ds_enable_test_assertions(test_protection_envelopes)
+
+    add_executable(test_direct_numeric_boundaries tests/test_direct_numeric_boundaries.cpp)
+    target_link_libraries(test_direct_numeric_boundaries PRIVATE ds_battery)
+    add_test(NAME test_direct_numeric_boundaries COMMAND test_direct_numeric_boundaries)
+    ds_enable_test_assertions(test_direct_numeric_boundaries)
+
+    add_executable(test_regen_boundaries tests/test_regen_boundaries.cpp)
+    target_link_libraries(test_regen_boundaries PRIVATE ds_battery)
+    add_test(NAME test_regen_boundaries COMMAND test_regen_boundaries)
+    ds_enable_test_assertions(test_regen_boundaries)
+
+    add_executable(test_bms_adapter_evidence tests/test_bms_adapter_evidence.cpp)
+    target_link_libraries(test_bms_adapter_evidence PRIVATE ds_ailee_governor)
+    add_test(NAME test_bms_adapter_evidence COMMAND test_bms_adapter_evidence)
+    ds_enable_test_assertions(test_bms_adapter_evidence)
+
     add_executable(test_ailee_governor tests/test_ailee_governor.cpp)
     target_link_libraries(test_ailee_governor PRIVATE ds_ailee_governor)
+    if(DS_ENABLE_PYTHON_GOVERNOR)
+        target_compile_definitions(test_ailee_governor PRIVATE DS_TEST_PYTHON_GOVERNOR=1)
+    endif()
     add_test(NAME test_ailee_governor COMMAND test_ailee_governor)
     ds_enable_test_assertions(test_ailee_governor)
 
@@ -232,7 +255,7 @@ set_target_properties(ds_enhancer PROPERTIES
 if(DS_BUILD_TESTS)
     add_test(NAME test_cli_version COMMAND ds_enhancer --version)
     set_tests_properties(test_cli_version PROPERTIES
-        PASS_REGULAR_EXPRESSION "DS-EV 8\\.0\\.0"
+        PASS_REGULAR_EXPRESSION "DS-EV 8\\.0\\.1"
     )
 endif()
 

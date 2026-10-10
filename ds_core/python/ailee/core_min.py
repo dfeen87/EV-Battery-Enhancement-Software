@@ -8,6 +8,7 @@ and governance structures for automotive HP and EV control.
 from __future__ import annotations
 
 import time
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, IntEnum
@@ -126,6 +127,51 @@ class GovernanceDecision:
         }
 
 
+def _validated_signals(signals: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate evidence before comparisons, arithmetic, or fallback authorization."""
+    if not isinstance(signals, dict) or signals.get("sensor_valid") is not True:
+        raise ValueError("Missing or invalid sensor validity evidence")
+    normalized = dict(signals)
+    required = ("hp_mech", "hp_elec", "hp_consistency_score", "soc", "soh", "temp_c")
+    optional = {"max_torque_nm": 400.0, "max_current_a": 500.0}
+    numeric_keys = required + tuple(optional) + tuple(
+        key for key in ("torque_nm", "rpm", "v_batt", "i_batt") if key in signals
+    )
+    for key in numeric_keys:
+        value = signals.get(key, optional.get(key))
+        if isinstance(value, bool):
+            raise ValueError(f"Invalid numeric evidence: {key}")
+        try:
+            value = float(value)
+        except (TypeError, ValueError, OverflowError) as err:
+            raise ValueError(f"Missing or invalid numeric evidence: {key}") from err
+        if not math.isfinite(value):
+            raise ValueError(f"Nonfinite numeric evidence: {key}")
+        normalized[key] = value
+    for key in ("hp_mech", "hp_elec", "max_torque_nm", "max_current_a",
+                "torque_nm", "rpm", "i_batt"):
+        if key in normalized and normalized[key] < 0.0:
+            raise ValueError(f"Negative numeric evidence: {key}")
+    for key, upper in (("soc", 100.0), ("soh", 100.0), ("hp_consistency_score", 1.0)):
+        if not 0.0 <= normalized[key] <= upper:
+            raise ValueError(f"Out-of-domain numeric evidence: {key}")
+    if "v_batt" in normalized and normalized["v_batt"] <= 0.0:
+        raise ValueError("Nonpositive voltage evidence")
+    return normalized
+
+
+def _rejected_decision(reason: str, timestamp: Optional[str] = None) -> GovernanceDecision:
+    """Malformed evidence authorizes no output, independent of the percentage policy."""
+    return GovernanceDecision(
+        level=int(GovernanceLevel.LEVEL_3_PROTECTIVE),
+        governed_hp=0.0, governed_torque=0.0, governed_discharge_current=0.0,
+        trust_score=0.0, hp_consistency_score=0.0,
+        reason=f"PROTECTIVE MODE ACTIVATED (Level 3 Rejection): {reason}",
+        timestamp=timestamp or datetime.now(timezone.utc).isoformat(),
+        used_fallback=True, reasons=[reason],
+    )
+
+
 class DomainRegistry:
     """Registry for AILEE governance domains"""
     _domains: Dict[str, Any] = {}
@@ -198,14 +244,34 @@ class AileeTrustPipeline:
     def process(self, signals: Dict[str, Any]) -> GovernanceDecision:
         """
         Orchestrate governance evaluation over input signals dict.
-        Applies fallback to Level 3 / conservative HP limit if trust_score < threshold or domain raises exception.
+        Applies the configured percentage fallback for valid low-trust evidence;
+        malformed evidence or domain failures receive zero authorization.
         """
         now_iso = datetime.now(timezone.utc).isoformat()
 
         try:
+            signals = _validated_signals(signals)
             if self.domain and hasattr(self.domain, "evaluate_signals"):
                 decision = self.domain.evaluate_signals(signals)
                 if isinstance(decision, GovernanceDecision):
+                    valid_limits = all(
+                        not isinstance(value, bool) and math.isfinite(value) and value >= 0.0 for value in (
+                            decision.governed_hp, decision.governed_torque,
+                            decision.governed_discharge_current,
+                        )
+                    )
+                    valid_scores = all(
+                        not isinstance(value, bool) and math.isfinite(value) and 0.0 <= value <= 1.0 for value in (
+                            decision.trust_score, decision.hp_consistency_score,
+                        )
+                    )
+                    if (not isinstance(decision.level, int) or isinstance(decision.level, bool)
+                            or not 0 <= decision.level <= 3 or not valid_limits or not valid_scores):
+                        return _rejected_decision("Domain returned an invalid governance decision", now_iso)
+                    if (decision.level == 3 and decision.used_fallback and decision.trust_score == 0.0
+                            and decision.governed_hp == 0.0 and decision.governed_torque == 0.0
+                            and decision.governed_discharge_current == 0.0):
+                        return decision
                     if decision.trust_score < self.cfg.borderline_low:
                         return self._create_fallback_decision(
                             signals,
@@ -213,6 +279,7 @@ class AileeTrustPipeline:
                             now_iso,
                         )
                     return decision
+                return _rejected_decision("Domain returned no governance decision", now_iso)
 
             # Fallback inline evaluation logic if no explicit domain handler
             hp_mech = float(signals.get("hp_mech", 0.0))
@@ -296,9 +363,13 @@ class AileeTrustPipeline:
             )
 
         except Exception as err:
-            return self._create_fallback_decision(signals, f"Trust pipeline error: {str(err)}", now_iso)
+            return _rejected_decision(f"Trust pipeline error: {str(err)}", now_iso)
 
     def _create_fallback_decision(self, signals: Dict[str, Any], reason: str, timestamp: str) -> GovernanceDecision:
+        try:
+            signals = _validated_signals(signals)
+        except (TypeError, ValueError, OverflowError) as err:
+            return _rejected_decision(f"Invalid fallback evidence: {err}", timestamp)
         max_hp = max(float(signals.get("hp_mech", 0.0)), float(signals.get("hp_elec", 0.0)), 100.0)
         max_torque = float(signals.get("max_torque_nm", 400.0))
         max_current = float(signals.get("max_current_a", 500.0))

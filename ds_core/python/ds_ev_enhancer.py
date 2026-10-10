@@ -20,7 +20,7 @@ _script_dir = os.path.dirname(os.path.abspath(__file__))
 if _script_dir not in sys.path:
     sys.path.insert(0, _script_dir)
 
-from ailee.core_min import AileeTrustPipeline, GovernanceDecision
+from ailee.core_min import AileeTrustPipeline, GovernanceDecision, _validated_signals, _rejected_decision
 from ailee.domains.automotive.ailee_automotive_domain import AileeAutomotiveDomain
 
 
@@ -124,27 +124,29 @@ class DSEVEnhancerOrchestrator:
         Calculates HP metrics, evaluates trust pipeline, records audit log,
         and returns dictionary suitable for Python caller or C++ bindings.
         """
-        hp_mech = compute_mechanical_hp(torque_nm, rpm)
-        hp_elec = compute_electrical_hp(v_batt, i_batt)
-        consistency = hp_consistency_score(hp_mech, hp_elec)
-
-        signals_dict = {
-            "torque_nm": float(torque_nm),
-            "rpm": float(rpm),
-            "v_batt": float(v_batt),
-            "i_batt": float(i_batt),
-            "soc": float(soc),
-            "soh": float(soh),
-            "temp_c": float(temp_c),
-            "hp_mech": hp_mech,
-            "hp_elec": hp_elec,
-            "hp_consistency_score": consistency,
-            "sensor_valid": bool(sensor_valid),
-            "max_torque_nm": float(max_torque_nm),
-            "max_current_a": float(max_current_a),
-        }
-
-        decision = self.pipeline.process(signals_dict)
+        try:
+            hp_mech = compute_mechanical_hp(float(torque_nm), float(rpm))
+            hp_elec = compute_electrical_hp(float(v_batt), float(i_batt))
+            consistency = hp_consistency_score(hp_mech, hp_elec)
+            signals_dict = _validated_signals({
+                "torque_nm": torque_nm,
+                "rpm": rpm,
+                "v_batt": v_batt,
+                "i_batt": i_batt,
+                "soc": soc,
+                "soh": soh,
+                "temp_c": temp_c,
+                "hp_mech": hp_mech,
+                "hp_elec": hp_elec,
+                "hp_consistency_score": consistency,
+                "sensor_valid": sensor_valid,
+                "max_torque_nm": max_torque_nm,
+                "max_current_a": max_current_a,
+            })
+            decision = self.pipeline.process(signals_dict)
+        except (TypeError, ValueError, OverflowError) as err:
+            hp_mech = hp_elec = 0.0
+            decision = _rejected_decision(f"Invalid EV signal evidence: {err}")
         self.audit_logger.log_decision(decision, hp_mech, hp_elec)
 
         return {

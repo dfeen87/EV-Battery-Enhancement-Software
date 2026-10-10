@@ -11,7 +11,7 @@ LOCAL_LOG = logs/install.log
 
 # Logger macro (single-line shell safe)
 define log_action
-	mkdir -p $(INSTALL_DIR)/logs 2>/dev/null || true; mkdir -p logs 2>/dev/null || true; echo "[`date +'%Y-%m-%d %H:%M:%S'`] VERSION: 8.0.0 | ACTION: $(1) | STATUS: $(2) | INFO: $(3)" | tee -a $(LOG_FILE) $(LOCAL_LOG) 2>/dev/null || true
+	mkdir -p $(INSTALL_DIR)/logs 2>/dev/null || true; mkdir -p logs 2>/dev/null || true; echo "[`date +'%Y-%m-%d %H:%M:%S'`] VERSION: 8.0.1 | ACTION: $(1) | STATUS: $(2) | INFO: $(3)" | tee -a $(LOG_FILE) $(LOCAL_LOG) 2>/dev/null || true
 endef
 
 all: help

@@ -1,7 +1,7 @@
 {
   "update_policy": {
     "prefer_git": true,
-    "fallback_url": "https://github.com/dfeen87/DS-EV-Battery-Enhancement-Software/releases/download/v8.0.0/payload.tar.gz",
+    "fallback_url": "https://github.com/dfeen87/DS-EV-Battery-Enhancement-Software/releases/download/v8.0.1/payload.tar.gz",
     "local_mock_source": "/opt/ds_enhancement/remote_payload/",
     "auto_rollback_on_failure": true
   }

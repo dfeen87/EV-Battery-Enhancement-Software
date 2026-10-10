@@ -21,7 +21,7 @@
  *
  * AUTHORS: Don Michael Feeney Jr. & Jules
  * LICENSE: Copyright (c) Don Michael Feeney Jr. Licensed under the MIT License.
- * VERSION: 8.0.0
+ * VERSION: 8.0.1
  * ============================================================================
  */
 
@@ -33,6 +33,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <stdexcept>
 
 namespace raps {
 namespace ev {
@@ -52,7 +53,9 @@ enum class DsmTripReason {
     CRITICAL_UNDERVOLTAGE_SAG,
     CRITICAL_OVERVOLTAGE_SURGE,
     CRITICAL_OVERTEMPERATURE,
-    BMS_SAFETY_FAULT
+    BMS_SAFETY_FAULT,
+    INVALID_INPUT,
+    NUMERICAL_FAILURE
 };
 
 inline const char* dsm_trip_reason_to_string(DsmTripReason reason) {
@@ -61,6 +64,8 @@ inline const char* dsm_trip_reason_to_string(DsmTripReason reason) {
         case DsmTripReason::CRITICAL_OVERVOLTAGE_SURGE: return "CRITICAL_OVERVOLTAGE_SURGE";
         case DsmTripReason::CRITICAL_OVERTEMPERATURE: return "CRITICAL_OVERTEMPERATURE";
         case DsmTripReason::BMS_SAFETY_FAULT: return "BMS_SAFETY_FAULT";
+        case DsmTripReason::INVALID_INPUT: return "INVALID_INPUT";
+        case DsmTripReason::NUMERICAL_FAILURE: return "NUMERICAL_FAILURE";
         default: return "NONE";
     }
 }
@@ -90,6 +95,29 @@ struct alignas(64) StabilityConfig {
     double imbalance_soft_mv = 40.0;
     double imbalance_hard_mv = 120.0;
     double cell_drift_compensation_gain = 0.75;
+
+    bool validate() const {
+        const double values[] = {min_voltage_threshold_v, max_voltage_threshold_v,
+            voltage_sag_warning_v, voltage_sag_damping_factor,
+            max_discharge_current_a, max_charge_current_a, current_spike_alpha,
+            max_regen_surge_rate_a_per_s, regen_surge_damping_gain,
+            temp_soft_limit_c, temp_hard_limit_c, thermal_oscillation_tau_s,
+            imbalance_soft_mv, imbalance_hard_mv, cell_drift_compensation_gain};
+        for (double value : values) if (!std::isfinite(value)) return false;
+        return min_voltage_threshold_v > 0.0 &&
+            voltage_sag_warning_v > min_voltage_threshold_v &&
+            max_voltage_threshold_v >= voltage_sag_warning_v &&
+            voltage_sag_damping_factor >= 0.0 && voltage_sag_damping_factor <= 1.0 &&
+            max_discharge_current_a > 0.0 && max_charge_current_a > 0.0 &&
+            current_spike_alpha >= 0.0 && current_spike_alpha <= 1.0 &&
+            max_regen_surge_rate_a_per_s > 0.0 &&
+            regen_surge_damping_gain >= 0.0 && regen_surge_damping_gain <= 1.0 &&
+            temp_hard_limit_c > temp_soft_limit_c &&
+            std::isfinite(temp_hard_limit_c - temp_soft_limit_c) &&
+            thermal_oscillation_tau_s > 0.0 && imbalance_soft_mv >= 0.0 &&
+            imbalance_hard_mv > imbalance_soft_mv &&
+            cell_drift_compensation_gain >= 0.0 && cell_drift_compensation_gain <= 1.0;
+    }
 };
 
 struct alignas(64) StabilityState {
@@ -119,9 +147,12 @@ private:
 
 public:
     explicit RapsEVStabilityMembrane(const StabilityConfig& config = StabilityConfig())
-        : config_(config) {}
+        : config_(config) {
+        if (!config.validate()) throw std::invalid_argument("Invalid RAPS stability configuration");
+    }
 
     void init(const StabilityConfig& config) {
+        if (!config.validate()) throw std::invalid_argument("Invalid RAPS stability configuration");
         config_ = config;
         state_ = StabilityState();
     }
@@ -139,6 +170,46 @@ public:
         double pack_temperature,
         const ds_plugin::DiagnosticReport* diag = nullptr,
         double dt = 0.01) {
+
+        if (!std::isfinite(pack_voltage) || pack_voltage <= 0.0 ||
+            !std::isfinite(pack_current) || !std::isfinite(pack_temperature) ||
+            !std::isfinite(dt) || dt <= 0.0 ||
+            (diag && (!std::isfinite(diag->voltage_imbalance_mv) || diag->voltage_imbalance_mv < 0.0))) {
+            return deny(DsmTripReason::INVALID_INPUT);
+        }
+        // Stage filters so rejected arithmetic cannot change future evaluations.
+        auto candidate = *this;
+        try {
+            candidate.evaluate_candidate(pack_voltage, pack_current, pack_temperature, diag, dt);
+        } catch (const std::domain_error&) {
+            return deny(DsmTripReason::NUMERICAL_FAILURE);
+        }
+        state_ = candidate.state_;
+        return state_;
+    }
+
+private:
+    static double finite(double value) {
+        if (!std::isfinite(value)) throw std::domain_error("Nonfinite RAPS arithmetic");
+        return value;
+    }
+
+    StabilityState deny(DsmTripReason reason) {
+        // Publish denial while retaining the last accepted numeric filter history.
+        state_.dsm_tripped = true;
+        state_.trip_code = reason;
+        state_.voltage_sag_ratio = 0.0;
+        state_.current_spike_ratio = 0.0;
+        state_.regen_surge_ratio = 0.0;
+        state_.thermal_stability_ratio = 0.0;
+        state_.cell_drift_ratio = 0.0;
+        state_.overall_membrane_stability = 0.0;
+        state_.stability_boost_allowance = 0.0;
+        return state_;
+    }
+
+    StabilityState evaluate_candidate(double pack_voltage, double pack_current,
+        double pack_temperature, const ds_plugin::DiagnosticReport* diag, double dt) {
 
         dt = std::max(1e-5, dt);
 
@@ -182,10 +253,10 @@ public:
         }
 
         // --- 3. Current Spike Filter (Exponential Damping) ---
-        state_.filtered_current_a = state_.filtered_current_a +
-            config_.current_spike_alpha * (pack_current - state_.filtered_current_a);
+        state_.filtered_current_a = finite(state_.filtered_current_a +
+            config_.current_spike_alpha * finite(pack_current - state_.filtered_current_a));
 
-        double spike_magnitude = std::abs(pack_current - state_.filtered_current_a);
+        double spike_magnitude = std::abs(finite(pack_current - state_.filtered_current_a));
         double max_current_ref = (pack_current >= 0.0) ? config_.max_discharge_current_a
                                                         : config_.max_charge_current_a;
         double spike_ratio_raw = 1.0 - (spike_magnitude / std::max(1.0, max_current_ref));
@@ -197,13 +268,14 @@ public:
             // Low pass filter regen current to avoid step-function derivative artifacts
             double alpha_regen = dt / (dt + 0.05); // 50ms smoothing window
             double prev_filtered = state_.filtered_regen_current_a;
-            state_.filtered_regen_current_a += alpha_regen * (regen_curr - state_.filtered_regen_current_a);
+            state_.filtered_regen_current_a = finite(state_.filtered_regen_current_a +
+                alpha_regen * finite(regen_curr - state_.filtered_regen_current_a));
 
-            double regen_rate = (state_.filtered_regen_current_a - prev_filtered) / dt;
+            double regen_rate = finite(finite(state_.filtered_regen_current_a - prev_filtered) / dt);
 
             if (regen_rate > config_.max_regen_surge_rate_a_per_s) {
-                double excess_surge = (regen_rate - config_.max_regen_surge_rate_a_per_s) /
-                                      config_.max_regen_surge_rate_a_per_s;
+                double excess_surge = finite((regen_rate - config_.max_regen_surge_rate_a_per_s) /
+                                      config_.max_regen_surge_rate_a_per_s);
                 excess_surge = std::clamp(excess_surge, 0.0, 1.0);
                 state_.regen_surge_ratio = 1.0 - (config_.regen_surge_damping_gain * excess_surge);
             } else {
@@ -215,17 +287,18 @@ public:
         }
 
         // --- 5. Thermal Oscillation Stabilization ---
-        double dT = (pack_temperature - state_.last_temperature_c) / dt;
+        double dT = finite(finite(pack_temperature - state_.last_temperature_c) / dt);
         state_.last_temperature_c = pack_temperature;
 
         // Low-pass filter temperature derivative
-        double dT_alpha = dt / (dt + config_.thermal_oscillation_tau_s);
-        state_.temp_derivative_c_per_s += dT_alpha * (dT - state_.temp_derivative_c_per_s);
+        double dT_alpha = dt / finite(dt + config_.thermal_oscillation_tau_s);
+        state_.temp_derivative_c_per_s = finite(state_.temp_derivative_c_per_s +
+            dT_alpha * finite(dT - state_.temp_derivative_c_per_s));
 
         double thermal_factor = 1.0;
         if (pack_temperature > config_.temp_soft_limit_c) {
-            double temp_taper = (pack_temperature - config_.temp_soft_limit_c) /
-                               (config_.temp_hard_limit_c - config_.temp_soft_limit_c);
+            double temp_taper = finite(finite(pack_temperature - config_.temp_soft_limit_c) /
+                               (config_.temp_hard_limit_c - config_.temp_soft_limit_c));
             thermal_factor -= 0.5 * std::clamp(temp_taper, 0.0, 1.0);
         }
         // Dampen rapid thermal spikes
@@ -237,8 +310,8 @@ public:
 
         // --- 6. Cell Imbalance Drift Compensation ---
         if (diag && diag->voltage_imbalance_mv > config_.imbalance_soft_mv) {
-            double imb_ratio = (diag->voltage_imbalance_mv - config_.imbalance_soft_mv) /
-                               (config_.imbalance_hard_mv - config_.imbalance_soft_mv);
+            double imb_ratio = finite((diag->voltage_imbalance_mv - config_.imbalance_soft_mv) /
+                               (config_.imbalance_hard_mv - config_.imbalance_soft_mv));
             imb_ratio = std::clamp(imb_ratio, 0.0, 1.0);
             state_.cell_drift_ratio = 1.0 - (config_.cell_drift_compensation_gain * imb_ratio);
         } else {
