@@ -264,11 +264,17 @@ corrective iteration. No test assertions, warnings, or CI gates were weakened.
 | Python syntax checks | Main interfaces, tests, and Python scripts passed |
 | `make verify` / cppcheck | Nonzero, unchanged baseline: 52 `uninitMemberVarNoCtor`, 4 `returnByReference`, 1 `throwInEntryPoint`; host checks are not reached |
 | Repository and targeted clang-tidy | Both exit 0. Repository invocation reports one default-suppressed non-user-code warning; targeted governed source and three new C++ regression files report five such warnings using the Release compilation database |
+| Hosted GitHub CI for follow-up implementation `6e52bfd52062a08f820356f38369291d73f4c248` | Push and PR workflows succeed; CMake build, CTest, Python discovery, and simulation steps report success |
 | Final diff / historical artifacts | Whitespace check passed; v8.0.0 release report, historical simulation observations, and tracked BEDROCK CLI binary unchanged |
 
-Hosted CI for the earlier implementation is historical evidence above, not proof
-of this follow-up head. The existing PR remains a draft for human review; hosted
-results for the follow-up must be checked after its branch is pushed.
+Hosted [push CI](https://github.com/dfeen87/DS-EV-Battery-Enhancement-Software/actions/runs/38043147399)
+and [PR CI](https://github.com/dfeen87/DS-EV-Battery-Enhancement-Software/actions/runs/38043151694)
+validate the follow-up implementation commit above. Per-step results were verified
+through the GitHub API; hosted per-test counts are not claimed. These successes
+remain distinct from the cloud-local missing-`sudo` errors and separate cppcheck
+gate. Hosted annotations also report the checkout action's Node.js runtime
+deprecation and the planned `ubuntu-latest` image migration; those workflows still
+complete successfully. The existing PR remains a draft for human review.
 
 **Version remains PATCH 8.0.1:** these changes enforce existing finite-evidence,
 fail-closed, configured-ceiling, and current-cycle authorization contracts.
