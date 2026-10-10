@@ -135,6 +135,91 @@ bool test_raw_sensor_safety_evidence() {
     return true;
 }
 
+bool test_configured_safety_limits_enforcement() {
+    std::cout << "Testing configured safety limits enforcement (PB-06)..." << std::flush;
+    ds_plugin::DSBMSMiddleware middleware;
+    ds_plugin::MiddlewareConfig config;
+    config.nominal_capacity_ah = 75.0;
+    config.nominal_voltage = 400.0;
+    config.enable_safety_monitoring = true;
+    config.safety_limits.min_soc = 0.2;
+    config.safety_limits.max_soc = 0.8;
+    config.safety_limits.min_operating_temp = 0.0;
+    middleware.init_advanced(config);
+
+    // Baseline: Normal state
+    auto normal = middleware.enhance_cycle(400.0, 10.0, 25.0, 0.5, 1.0);
+    (void)normal;
+    assert(!middleware.diagnostics().safety_fault);
+    assert(!middleware.diagnostics().soc_warning);
+    assert(!middleware.diagnostics().low_temp_warning);
+
+    // 1. SOC Limits
+    // SOC < min_soc while discharging (current > 0) -> Fault
+    middleware.enhance_cycle(400.0, 10.0, 25.0, 0.1, 1.0);
+    assert(middleware.diagnostics().safety_fault);
+    assert(middleware.diagnostics().soc_warning);
+
+    // SOC < min_soc while resting (current == 0) -> Advisory
+    middleware.enhance_cycle(400.0, 0.0, 25.0, 0.1, 1.0);
+    assert(!middleware.diagnostics().safety_fault);
+    assert(middleware.diagnostics().soc_warning);
+
+    // SOC < min_soc while charging (current < 0) -> Advisory (Charging from low SOC is allowed)
+    middleware.enhance_cycle(400.0, -10.0, 25.0, 0.1, 1.0);
+    assert(!middleware.diagnostics().safety_fault);
+    assert(middleware.diagnostics().soc_warning);
+
+    // SOC exactly at min_soc while discharging -> Pass (Equality is permitted)
+    middleware.enhance_cycle(400.0, 10.0, 25.0, 0.2, 1.0);
+    assert(!middleware.diagnostics().safety_fault);
+    assert(!middleware.diagnostics().soc_warning);
+
+    // SOC > max_soc while charging (current < 0) -> Fault
+    middleware.enhance_cycle(400.0, -10.0, 25.0, 0.9, 1.0);
+    assert(middleware.diagnostics().safety_fault);
+    assert(middleware.diagnostics().soc_warning);
+
+    // SOC > max_soc while resting (current == 0) -> Advisory
+    middleware.enhance_cycle(400.0, 0.0, 25.0, 0.9, 1.0);
+    assert(!middleware.diagnostics().safety_fault);
+    assert(middleware.diagnostics().soc_warning);
+
+    // SOC > max_soc while discharging (current > 0) -> Advisory (Discharging from high SOC is allowed)
+    middleware.enhance_cycle(400.0, 10.0, 25.0, 0.9, 1.0);
+    assert(!middleware.diagnostics().safety_fault);
+    assert(middleware.diagnostics().soc_warning);
+
+    // SOC exactly at max_soc while charging -> Pass
+    middleware.enhance_cycle(400.0, -10.0, 25.0, 0.8, 1.0);
+    assert(!middleware.diagnostics().safety_fault);
+    assert(!middleware.diagnostics().soc_warning);
+
+    // 2. Temperature limits
+    // Temp < min_operating_temp while charging -> Fault
+    middleware.enhance_cycle(400.0, -10.0, -5.0, 0.5, 1.0);
+    assert(middleware.diagnostics().safety_fault);
+    assert(middleware.diagnostics().low_temp_warning);
+
+    // Temp < min_operating_temp while discharging -> Fault
+    middleware.enhance_cycle(400.0, 10.0, -5.0, 0.5, 1.0);
+    assert(middleware.diagnostics().safety_fault);
+    assert(middleware.diagnostics().low_temp_warning);
+
+    // Temp < min_operating_temp while resting -> Advisory
+    middleware.enhance_cycle(400.0, 0.0, -5.0, 0.5, 1.0);
+    assert(!middleware.diagnostics().safety_fault);
+    assert(middleware.diagnostics().low_temp_warning);
+
+    // Temp exactly at min_operating_temp -> Pass
+    middleware.enhance_cycle(400.0, 10.0, 0.0, 0.5, 1.0);
+    assert(!middleware.diagnostics().safety_fault);
+    assert(!middleware.diagnostics().low_temp_warning);
+
+    std::cout << " PASS\n";
+    return true;
+}
+
 bool test_non_finite_soc_rejection_is_atomic() {
     std::cout << "Testing original SOC evidence rejection..." << std::flush;
     ds_plugin::DSBMSMiddleware middleware;
@@ -177,6 +262,7 @@ int main() {
         all_passed &= test_middleware_diagnostics();
         all_passed &= test_middleware_safety();
         all_passed &= test_raw_sensor_safety_evidence();
+        all_passed &= test_configured_safety_limits_enforcement();
         all_passed &= test_non_finite_soc_rejection_is_atomic();
         
         std::cout << "\n============================================================================\n";

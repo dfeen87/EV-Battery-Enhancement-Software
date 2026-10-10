@@ -40,6 +40,7 @@
 #include <optional>
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 
 namespace ds_plugin {
 
@@ -172,6 +173,9 @@ public:
           series_cells_(series_cells),
           cell_backend_(cell_backend)
     {
+        if (std::isnan(map_.max_signal_age_s) || std::isinf(map_.max_signal_age_s) || map_.max_signal_age_s < 0.0) {
+            throw std::invalid_argument("max_signal_age_s must be finite and nonnegative");
+        }
         cell_voltages_.assign(std::max(1, series_cells_), 0.0);
         cell_temps_.assign(std::max(1, series_cells_), 25.0);
     }
@@ -359,7 +363,29 @@ private:
         if (!s.valid) {
             throw std::runtime_error(std::string("Missing required signal: ") + name);
         }
-        const double age = now_seconds() - s.timestamp_s;
+
+        const double current_time = now_seconds();
+        if (std::isnan(current_time) || std::isinf(current_time)) {
+            throw std::runtime_error(std::string("Invalid clock: ") + name);
+        }
+        if (std::isnan(s.timestamp_s) || std::isinf(s.timestamp_s)) {
+            throw std::runtime_error(std::string("Invalid timestamp: ") + name);
+        }
+
+        const double age = current_time - s.timestamp_s;
+
+        if (std::isnan(age) || std::isinf(age)) {
+            throw std::runtime_error(std::string("Invalid age calculation: ") + name);
+        }
+
+        if (age < 0.0) {
+            throw std::runtime_error(std::string("Future timestamp or backward clock: ") + name);
+        }
+
+        if (std::isnan(map_.max_signal_age_s) || std::isinf(map_.max_signal_age_s) || map_.max_signal_age_s < 0.0) {
+            throw std::runtime_error(std::string("Invalid max_signal_age_s config: ") + name);
+        }
+
         if (age > map_.max_signal_age_s) {
             throw std::runtime_error(std::string("Stale signal: ") + name);
         }

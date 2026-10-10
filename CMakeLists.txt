@@ -191,6 +191,11 @@ if(DS_BUILD_TESTS)
     add_test(NAME test_middleware COMMAND test_middleware)
     ds_enable_test_assertions(test_middleware)
 
+    add_executable(test_hardware_adapter tests/test_hardware_adapter.cpp)
+    target_link_libraries(test_hardware_adapter PRIVATE ds_battery)
+    add_test(NAME test_hardware_adapter COMMAND test_hardware_adapter)
+    ds_enable_test_assertions(test_hardware_adapter)
+
     add_executable(test_protection_envelopes tests/test_protection_envelopes.cpp)
     target_link_libraries(test_protection_envelopes PRIVATE ds_battery)
     add_test(NAME test_protection_envelopes COMMAND test_protection_envelopes)
