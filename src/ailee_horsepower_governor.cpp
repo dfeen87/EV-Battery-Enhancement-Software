@@ -9,6 +9,30 @@
 
 #include "ailee_horsepower_governor.hpp"
 
+namespace {
+bool validSignals(const RawSignals& signals) {
+    return signals.ctx.sensor_valid && std::isfinite(signals.torque_nm) &&
+        signals.torque_nm >= 0.0 && std::isfinite(signals.rpm) && signals.rpm >= 0.0 &&
+        std::isfinite(signals.v_batt) && signals.v_batt > 0.0 &&
+        std::isfinite(signals.i_batt) && signals.i_batt >= 0.0 &&
+        std::isfinite(signals.ctx.soc) && signals.ctx.soc >= 0.0 && signals.ctx.soc <= 100.0 &&
+        std::isfinite(signals.ctx.soh) && signals.ctx.soh >= 0.0 && signals.ctx.soh <= 100.0 &&
+        std::isfinite(signals.ctx.temp_c) &&
+        std::isfinite(AileeHorsepowerGovernor::computeMechanicalHp(signals.torque_nm, signals.rpm)) &&
+        std::isfinite(AileeHorsepowerGovernor::computeElectricalHp(signals.v_batt, signals.i_batt));
+}
+
+GovernanceDecisionCpp rejectedDecision(const std::string& reason) {
+    GovernanceDecisionCpp decision;
+    decision.level = 3;
+    decision.trust_score = 0.0;
+    decision.hp_consistency_score = 0.0;
+    decision.used_fallback = true;
+    decision.reason = reason;
+    return decision;
+}
+}
+
 #ifdef DS_ENABLE_PYTHON_GOVERNOR
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wattributes"
@@ -57,6 +81,9 @@ struct AileeHorsepowerGovernor::Impl {
 #endif
 
     GovernanceDecisionCpp fallbackEvaluate(const RawSignals& signals) const {
+        if (!validSignals(signals)) {
+            return rejectedDecision("C++ Fallback Level 3: Sensor validity or numeric-domain check failed.");
+        }
         GovernanceDecisionCpp dec;
         dec.hp_mech = AileeHorsepowerGovernor::computeMechanicalHp(signals.torque_nm, signals.rpm);
         dec.hp_elec = AileeHorsepowerGovernor::computeElectricalHp(signals.v_batt, signals.i_batt);
@@ -65,24 +92,6 @@ struct AileeHorsepowerGovernor::Impl {
         double max_hp = std::max({dec.hp_mech, dec.hp_elec, 1.0});
         double max_torque = signals.torque_nm > 0.0 ? signals.torque_nm : 400.0;
         double max_current = signals.i_batt > 0.0 ? signals.i_batt : 500.0;
-
-        const bool finite_inputs = std::isfinite(signals.torque_nm) && std::isfinite(signals.rpm) &&
-            std::isfinite(signals.v_batt) && std::isfinite(signals.i_batt) &&
-            std::isfinite(signals.ctx.soc) && std::isfinite(signals.ctx.soh) &&
-            std::isfinite(signals.ctx.temp_c);
-        if (!signals.ctx.sensor_valid || !finite_inputs || signals.torque_nm < 0.0 ||
-            signals.rpm < 0.0 || signals.v_batt <= 0.0 || signals.i_batt < 0.0 ||
-            signals.ctx.soc < 0.0 || signals.ctx.soc > 100.0 ||
-            signals.ctx.soh < 0.0 || signals.ctx.soh > 100.0) {
-            dec.level = 3;
-            dec.governed_hp = max_hp * 0.25;
-            dec.governed_torque = max_torque * 0.25;
-            dec.governed_discharge_current = max_current * 0.25;
-            dec.trust_score = 0.0;
-            dec.reason = "C++ Fallback Level 3: Sensor validity or numeric-domain check failed.";
-            dec.used_fallback = true;
-            return dec;
-        }
 
         double trust = 1.0;
         if (dec.hp_consistency_score < 0.85) {
@@ -166,14 +175,7 @@ double AileeHorsepowerGovernor::governHorsepower(double raw_hp_mech, double raw_
 }
 
 GovernanceDecisionCpp AileeHorsepowerGovernor::evaluate(const RawSignals& signals) {
-    const bool valid = signals.ctx.sensor_valid && std::isfinite(signals.torque_nm) &&
-        signals.torque_nm >= 0.0 && std::isfinite(signals.rpm) && signals.rpm >= 0.0 &&
-        std::isfinite(signals.v_batt) && signals.v_batt > 0.0 &&
-        std::isfinite(signals.i_batt) && signals.i_batt >= 0.0 &&
-        std::isfinite(signals.ctx.soc) && signals.ctx.soc >= 0.0 && signals.ctx.soc <= 100.0 &&
-        std::isfinite(signals.ctx.soh) && signals.ctx.soh >= 0.0 && signals.ctx.soh <= 100.0 &&
-        std::isfinite(signals.ctx.temp_c);
-    if (!valid) {
+    if (!validSignals(signals)) {
         return impl_->fallbackEvaluate(signals);
     }
     if (!impl_->py_initialized) {
@@ -195,6 +197,13 @@ GovernanceDecisionCpp AileeHorsepowerGovernor::evaluate(const RawSignals& signal
             signals.i_batt > 0.0 ? signals.i_batt : 500.0
         );
 
+        for (const char* key : {"level", "governed_hp", "governed_torque",
+                               "governed_discharge_current", "trust_score",
+                               "hp_consistency_score", "hp_mech", "hp_elec"}) {
+            if (py::isinstance<py::bool_>(py_res[key])) {
+                return rejectedDecision("Level 3: Python governor returned boolean numeric evidence.");
+            }
+        }
         GovernanceDecisionCpp dec;
         dec.level = py_res["level"].cast<int>();
         dec.governed_hp = py_res["governed_hp"].cast<double>();
@@ -207,9 +216,21 @@ GovernanceDecisionCpp AileeHorsepowerGovernor::evaluate(const RawSignals& signal
         dec.reason = py_res["reason"].cast<std::string>();
         dec.used_fallback = py_res["used_fallback"].cast<bool>();
 
+        const bool valid_decision = dec.level >= 0 && dec.level <= 3 &&
+            std::isfinite(dec.governed_hp) && dec.governed_hp >= 0.0 &&
+            std::isfinite(dec.governed_torque) && dec.governed_torque >= 0.0 &&
+            std::isfinite(dec.governed_discharge_current) && dec.governed_discharge_current >= 0.0 &&
+            std::isfinite(dec.trust_score) && dec.trust_score >= 0.0 && dec.trust_score <= 1.0 &&
+            std::isfinite(dec.hp_consistency_score) && dec.hp_consistency_score >= 0.0 &&
+            dec.hp_consistency_score <= 1.0 && std::isfinite(dec.hp_mech) && dec.hp_mech >= 0.0 &&
+            std::isfinite(dec.hp_elec) && dec.hp_elec >= 0.0;
+        if (!valid_decision) {
+            return rejectedDecision("Level 3: Python governor returned an invalid decision.");
+        }
+
         return dec;
     } catch (const std::exception& e) {
-        return impl_->fallbackEvaluate(signals);
+        return rejectedDecision("Level 3: Python governor evaluation failed.");
     }
 #else
     return impl_->fallbackEvaluate(signals);

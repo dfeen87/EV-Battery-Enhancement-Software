@@ -29,13 +29,22 @@ GovernedTorqueOutput DSAileeTorqueManager::processTorqueCommand(const TorqueComm
         std::isfinite(cmd.i_batt) && cmd.i_batt >= 0.0 &&
         std::isfinite(cmd.ctx.soc) && cmd.ctx.soc >= 0.0 && cmd.ctx.soc <= 100.0 &&
         std::isfinite(cmd.ctx.soh) && cmd.ctx.soh >= 0.0 && cmd.ctx.soh <= 100.0 &&
-        std::isfinite(cmd.ctx.temp_c) && cmd.ctx.sensor_valid;
+        std::isfinite(cmd.ctx.temp_c) && cmd.ctx.sensor_valid &&
+        std::isfinite(AileeHorsepowerGovernor::computeMechanicalHp(cmd.requested_torque_nm, std::max(1.0, cmd.motor_rpm))) &&
+        std::isfinite(AileeHorsepowerGovernor::computeElectricalHp(cmd.v_batt, cmd.i_batt));
     if (!valid) {
+        last_decision_ = GovernanceDecisionCpp{};
+        last_decision_.level = 3;
+        last_decision_.trust_score = 0.0;
+        last_decision_.hp_consistency_score = 0.0;
+        last_decision_.used_fallback = true;
+        last_decision_.reason = "AILEE trust boundary rejected invalid torque evidence";
         GovernedTorqueOutput output;
         output.governance_level = 3;
         output.trust_score = 0.0;
+        output.hp_consistency_score = 0.0;
         output.derating_active = true;
-        output.reason = "AILEE trust boundary rejected invalid torque evidence";
+        output.reason = last_decision_.reason;
         return output;
     }
     RawSignals signals;

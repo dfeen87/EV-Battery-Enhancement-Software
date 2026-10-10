@@ -8,10 +8,10 @@
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://isocpp.org/)
 [![Status: Production Ready](https://img.shields.io/badge/Status-Production%20Ready-green.svg)]()
 [![Hardened](https://img.shields.io/badge/Hardened-Edition%20Ready-Purple.svg)]()
-[![Version](https://img.shields.io/badge/Version-8.0.0-blue.svg)]()
+[![Version](https://img.shields.io/badge/Version-8.0.1-blue.svg)]()
 [![CI](https://github.com/dfeen87/EV-Battery-Enhancement-Software/actions/workflows/ci.yml/badge.svg)](https://github.com/dfeen87/EV-Battery-Enhancement-Software/actions/workflows/ci.yml)
 
-**Current release: DS-EV v8.0.0.** This milestone hardens invariants, deterministic failure, subsystem contracts, CI execution, audit evidence, and the AILEE Trust Contract 9.4 target while preserving the existing DS architecture. See [the v8.0.0 engineering report](docs/RELEASE_8.0.0.md). Software test success is not vehicle hardware validation or safety certification.
+**Current release: DS-EV v8.0.1.** This compatible hardening release preserves raw sensor faults, enforces current protection ceilings, and rejects malformed horsepower-governance evidence. See [the v8.0.1 engineering report](docs/RELEASE_8.0.1.md) and [prioritized remediation backlog](docs/POST_BEDROCK_REMEDIATION_BACKLOG.md). The [historical v8.0.0 BEDROCK report](docs/RELEASE_8.0.0.md) is preserved. Software test success is not vehicle hardware validation or safety certification.
 
 Dual‑State (DS/ds) EV Enhancement Software is a production-ready, high-performance battery and power management suite for electric vehicles. By treating batteries as dual-state systems—where physical metrics (like voltage, current, and temperature) and historical stress tracking are dynamically coupled—we achieve earlier degradation detection, better health prediction, and optimized charging strategies.
 

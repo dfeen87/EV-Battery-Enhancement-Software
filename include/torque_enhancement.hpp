@@ -782,6 +782,8 @@ public:
             result.max_drive_torque_nm = 0.0;
             result.max_regen_torque_nm = 0.0;
             result.limiting_factor = "RAPS_DSM_TRIP (" + result.raps_dsm_trip_reason + ")";
+            // Recovery must ramp from the limit actually emitted by this cycle.
+            last_torque_limit_nm_ = 0.0;
             return result;
         }
 
@@ -829,9 +831,9 @@ public:
         // --- 9. Compute final drive torque ---
         double target_torque = base_torque * combined_scaling;
         
-        // Apply rate limiting for smooth transitions
-        target_torque = torque_rate_limiter(target_torque, 
-                                           last_torque_limit_nm_, dt);
+        // Smooth recovery without exceeding this cycle's protective envelope.
+        target_torque = std::min(target_torque,
+            torque_rate_limiter(target_torque, last_torque_limit_nm_, dt));
         
         // Power limit check
         double omega = 2.0 * M_PI * motor_speed_rpm / 60.0;

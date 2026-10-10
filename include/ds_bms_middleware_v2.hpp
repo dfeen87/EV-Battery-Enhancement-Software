@@ -224,13 +224,21 @@ public:
     ds::EnhancedState enhance_cycle(double v, double i, double t, double soc, double dt) {
         if (!initialized_) throw std::runtime_error("Middleware not initialized");
 
-        soc = std::clamp(soc, 0.0, 1.0);
-
+        // Let the core validate the original readings before normalization.
+        // In particular, clamping SOC here would turn infinity into valid data.
         enhanced_ = ds_core_->enhance(v, i, t, soc, dt);
+
+        // DS bounds its model inputs. Safety policy must evaluate the original
+        // evidence so those bounds cannot conceal a thermal or current fault.
+        ds::DSState observed = enhanced_.state;
+        observed.voltage = v;
+        observed.current = i;
+        observed.temperature = t;
+        observed.state_of_charge = soc;
 
         if (kalman_) {
             kalman_->predict(enhanced_.state, dt);
-            kalman_->update(soc, i);
+            kalman_->update(std::clamp(soc, 0.0, 1.0), i);
             auto f = kalman_->get_state();
             enhanced_.state.state_of_charge = std::clamp(f[0], 0.0, 1.0);
         }
@@ -241,7 +249,7 @@ public:
         if (i > 0) energy_out_kwh_ += e;
         else energy_in_kwh_ += std::abs(e);
 
-        update_diagnostics(dt);
+        update_diagnostics(dt, observed);
         return enhanced_;
     }
 
@@ -309,7 +317,7 @@ public:
     }
 
 private:
-    void update_diagnostics(double dt) {
+    void update_diagnostics(double dt, const ds::DSState& observed) {
         auto& s = enhanced_.state;
 
         diag_.pack_soc_percent = s.state_of_charge * 100.0;
@@ -335,7 +343,7 @@ private:
         }
 
         diag_.weak_cell_warning = false;
-        diag_.thermal_warning = false;
+        diag_.thermal_warning = observed.temperature > config_.safety_limits.max_operating_temp;
         diag_.balancing_required = false;
         bool imbalance_out_of_bounds = false;
         const bool pack_voltage_out_of_bounds =
@@ -351,7 +359,8 @@ private:
             diag_.min_cell_temp_c = pack_->get_min_cell_temperature();
             diag_.max_cell_temp_c = pack_->get_max_cell_temperature();
             diag_.weak_cell_warning = diag_.weak_cell_count > 0;
-            diag_.thermal_warning = diag_.max_cell_temp_c > config_.safety_limits.max_cell_temp;
+            diag_.thermal_warning = diag_.thermal_warning ||
+                diag_.max_cell_temp_c > config_.safety_limits.max_cell_temp;
             diag_.balancing_required =
                 diag_.voltage_imbalance_mv > config_.safety_limits.max_voltage_imbalance_mv;
             imbalance_out_of_bounds = diag_.balancing_required;
@@ -361,7 +370,7 @@ private:
         diag_.estimated_remaining_cycles = std::max(0.0, (1.0 - s.degradation) * 2000.0);
 
         if (config_.enable_safety_monitoring)
-            diag_.safety_fault = !safety_.check(s, diag_);
+            diag_.safety_fault = !safety_.check(observed, diag_);
 
         diag_.time_since_init_s += dt;
         diag_.update_count = ++updates_;

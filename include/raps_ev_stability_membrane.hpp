@@ -21,7 +21,7 @@
  *
  * AUTHORS: Don Michael Feeney Jr. & Jules
  * LICENSE: Copyright (c) Don Michael Feeney Jr. Licensed under the MIT License.
- * VERSION: 8.0.0
+ * VERSION: 8.0.1
  * ============================================================================
  */
 

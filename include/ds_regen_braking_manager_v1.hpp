@@ -288,8 +288,9 @@ public:
         // Apply combined derate to torque cap
         double max_allowed = base_torque_cap * combined;
 
-        // Slew limit output torque to avoid oscillation
-        double limited = slew_limit(last_output_torque_nm_, std::min(requested_torque, max_allowed), cfg_.torque_slew_nm_per_s, dt);
+        // Smooth recovery, but never delay a tighter protection or pedal ceiling.
+        const double target = std::min(requested_torque, max_allowed);
+        double limited = std::min(target, slew_limit(last_output_torque_nm_, target, cfg_.torque_slew_nm_per_s, dt));
 
         out.max_regen_torque_nm = std::max(0.0, limited);
 

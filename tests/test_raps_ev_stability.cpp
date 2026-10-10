@@ -103,7 +103,7 @@ void test_torque_manager_raps_integration() {
     cfg.enable_raps_stability_membrane = true;
     ds::drive::DSTorqueManager torque_mgr(cfg);
 
-    ds::EnhancedState enhanced;
+    ds::EnhancedState enhanced{};
     enhanced.state.voltage = 330.0; // voltage sag
     enhanced.state.current = 200.0;
     enhanced.state.temperature = 30.0;
@@ -135,7 +135,7 @@ void test_torque_manager_raps_integration() {
 
 void test_regen_braking_raps_integration() {
     ds::drive::DSRegenBrakingManager regen_mgr;
-    ds::EnhancedState enhanced;
+    ds::EnhancedState enhanced{};
     enhanced.state.voltage = 400.0;
     enhanced.state.temperature = 25.0;
     enhanced.state.state_of_charge = 0.6;

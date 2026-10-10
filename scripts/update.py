@@ -104,7 +104,7 @@ def main():
             log_message(f"CRITICAL: Failed to load update_source.json: {e}")
             sys.exit(3)
 
-        url = update_cfg.get("fallback_url", "https://github.com/dfeen87/DS-EV-Battery-Enhancement-Software/releases/download/v8.0.0/payload.tar.gz")
+        url = update_cfg.get("fallback_url", "https://github.com/dfeen87/DS-EV-Battery-Enhancement-Software/releases/download/v8.0.1/payload.tar.gz")
         log_message(f"Source URL from configuration: {url}")
 
         with tempfile.TemporaryDirectory() as temp_dir:

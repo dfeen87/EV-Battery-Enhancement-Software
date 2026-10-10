@@ -24,6 +24,8 @@ try:
         SafetyStatus,
         GovernanceLevel,
         GovernanceDecision,
+        _validated_signals,
+        _rejected_decision,
     )
 except ImportError:
     try:
@@ -34,6 +36,8 @@ except ImportError:
             SafetyStatus,
             GovernanceLevel,
             GovernanceDecision,
+            _validated_signals,
+            _rejected_decision,
         )
     except ImportError:
         AileeTrustPipeline = None
@@ -263,33 +267,21 @@ class AileeAutomotiveDomain:
         """
         Evaluate raw EV signals and produce a GovernanceDecision object.
         """
+        try:
+            signals = _validated_signals(signals)
+        except (TypeError, ValueError, OverflowError) as err:
+            return _rejected_decision(f"Invalid automotive governance evidence: {err}")
         hp_mech = float(signals.get("hp_mech", 0.0))
         hp_elec = float(signals.get("hp_elec", 0.0))
         consistency = float(signals.get("hp_consistency_score", 1.0))
         soc = float(signals.get("soc", 100.0))
         soh = float(signals.get("soh", 100.0))
         temp_c = float(signals.get("temp_c", 25.0))
-        sensor_valid = bool(signals.get("sensor_valid", True))
-
         max_hp = max(hp_mech, hp_elec, 1.0)
         max_torque = float(signals.get("max_torque_nm", 400.0))
         max_current = float(signals.get("max_current_a", 500.0))
 
         reasons = []
-
-        if not sensor_valid:
-            reasons.append("Sensor validity check failed")
-            return GovernanceDecision(
-                level=3,
-                governed_hp=max_hp * 0.25,
-                governed_torque=max_torque * 0.25,
-                governed_discharge_current=max_current * 0.25,
-                trust_score=0.0,
-                hp_consistency_score=consistency,
-                reason="Level 3 Protective: Sensor validity check failed.",
-                used_fallback=True,
-                reasons=reasons,
-            )
 
         # Base trust score from signals
         trust = 1.0

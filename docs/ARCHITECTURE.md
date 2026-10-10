@@ -36,7 +36,7 @@ The software integrates high-performance physical models (C++17) with robust scr
 
 ## 🔁 The Closed-Loop Energy Cycle
 
-The key differentiator of the DS stack v8.0.0 is its closed-loop energy management cycle. Instead of treating battery state estimation, motor torque delivery, and braking energy recovery as isolated silos, they are integrated into a continuous physics-informed loop.
+The key differentiator of the DS stack v8.0.1 is its closed-loop energy management cycle. Instead of treating battery state estimation, motor torque delivery, and braking energy recovery as isolated silos, they are integrated into a continuous physics-informed loop.
 
 ```
                   +--------------------------------+
