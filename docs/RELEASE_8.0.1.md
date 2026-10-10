@@ -128,9 +128,11 @@ regression was found within the selected corrections.
 | CLI, ctypes C ABI, REST examples | Established during environment onboarding | CLI 8.0.1 JSON and invalid-SOC exit, ctypes rejected-cycle equivalence, REST health and six populated JSON endpoints passed |
 | Repository cppcheck gate / `make verify` | Nonzero: 52 uninitialized-member warnings, 4 performance findings, 1 `throwInEntryPoint` error | Same finding IDs and counts; `make verify` still returns nonzero |
 | Repository clang-tidy invocation | Exit 0 | Exit 0; default tool output reports one suppressed non-user-code warning |
+| Targeted clang-tidy for changed governor/command source | Not recorded | Exit 0 using the Release compilation database |
+| Hosted GitHub CI | Not rerun on unchanged baseline | Push and PR workflows reported success for `62202ed69adcf76202808525a56bbc604967fa96` |
 | Diff / historical artifacts | Clean initial tree | Whitespace check passed; BEDROCK report, historical simulations and tracked CLI binary unchanged |
 
-**CI is not reported green.** Full Python discovery still errors in
+**Hosted CI and cloud-local validation differ.** Full cloud-local Python discovery errors in
 `test_installer_safety_gating` and `test_backup_and_rollback_flow` because `sudo`
 is unavailable. Their deployment actions did not execute. The other 18 tests,
 including the newly available binding test, completed successfully. The cppcheck
@@ -139,6 +141,16 @@ at `ds_battery_core.hpp:644` plus baseline aggregate-initialization and performa
 findings; no finding was suppressed to obtain a pass. `make verify` stops there,
 before its host checks. The successful strict builds independently verify the
 compiler and platform prerequisites.
+
+GitHub reports successful [push CI](https://github.com/dfeen87/DS-EV-Battery-Enhancement-Software/actions/runs/38039909719)
+and [PR CI](https://github.com/dfeen87/DS-EV-Battery-Enhancement-Software/actions/runs/38039946242)
+for the implementation commit above. The hosted job reports successful CMake
+build, CTest, Python discovery, and simulation steps. Its status is distinct from
+the two missing-`sudo` errors in this cloud machine and from the separate
+`make verify` static gate. Hosted per-test counts are not claimed here: workflow
+logs were unavailable through the current log-download network route. Hosted
+installer/rollback checks are software tests on an ephemeral CI runner, not a
+safety-critical deployment or physical-system validation.
 
 The optional build uses the repository's pybind11 v2.12.0 pin. This cloud Python's
 sysconfig points at `/install/lib`, while its actual library lives under its
