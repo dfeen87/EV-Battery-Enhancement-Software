@@ -59,4 +59,4 @@ jobs:
           cmake --build build --target ds_enhancer_pybind
 
       - name: Run Python Extension Smoke Test
-        run: python3 tests/test_pybind11_extension.py
+        run: python3 tests/smoke_pybind11.py
