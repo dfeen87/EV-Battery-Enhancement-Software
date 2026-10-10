@@ -32,3 +32,31 @@ jobs:
 
       - name: Run simulation smoke test
         run: ./build/basic_integration
+
+  build-test-python-extension:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up C++ toolchain
+        run: |
+          c++ --version
+          cmake --version
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+
+      - name: Build Python Extension
+        run: |
+          cmake -B build -DDS_ENABLE_PYTHON_GOVERNOR=ON
+          cmake --build build --target ds_enhancer_pybind
+
+      - name: Run Python Extension Smoke Test
+        run: python3 tests/smoke_pybind11.py

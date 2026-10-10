@@ -104,26 +104,66 @@ bool test_advisories_and_safety_limits_validation() {
     config.safety_limits.max_soc = 0.9;
     middleware.init_advanced(config);
 
-    // Test advisories: correct direction
-    middleware.enhance_cycle(360.0, -10.0, 25.0, 0.05, 1.0); // SOC below min, charging
+    // Clear state
+    middleware.enhance_cycle(360.0, 0.0, 25.0, 0.5, 1.0);
     auto diag = middleware.diagnostics();
     assert(!diag.safety_fault);
-    assert(diag.soc_warning);
+    assert(!diag.soc_warning);
     auto summary = middleware.get_status_summary();
-    assert(summary.find("ADVISORIES ACTIVE") != std::string::npos);
+    assert(summary.find("ADVISORIES ACTIVE") == std::string::npos);
+    assert(summary.find("WARNINGS ACTIVE") == std::string::npos);
+    assert(middleware.advisories().empty());
+    assert(middleware.faults().empty());
 
-    middleware.enhance_cycle(360.0, 10.0, 25.0, 0.95, 1.0); // SOC above max, discharging
+    // Test advisories: correct direction, SOC below min, charging (negative current)
+    middleware.enhance_cycle(360.0, -10.0, 25.0, 0.05, 1.0);
     diag = middleware.diagnostics();
     assert(!diag.safety_fault);
     assert(diag.soc_warning);
+    summary = middleware.get_status_summary();
+    assert(summary.find("ADVISORIES ACTIVE") != std::string::npos);
+    assert(summary.find("WARNINGS ACTIVE") == std::string::npos);
+    assert(middleware.advisories().size() == 1);
+    assert(middleware.advisories()[0] == "SOC below minimum operating limit while charging");
+    assert(middleware.faults().empty());
 
-    // Test hard fault: incorrect direction
-    middleware.enhance_cycle(360.0, 10.0, 25.0, 0.05, 1.0); // SOC below min, discharging
+    // Test advisories: correct direction, SOC above max, discharging (positive current)
+    middleware.enhance_cycle(360.0, 10.0, 25.0, 0.95, 1.0);
+    diag = middleware.diagnostics();
+    assert(!diag.safety_fault);
+    assert(diag.soc_warning);
+    summary = middleware.get_status_summary();
+    assert(summary.find("ADVISORIES ACTIVE") != std::string::npos);
+    assert(summary.find("WARNINGS ACTIVE") == std::string::npos);
+    assert(middleware.advisories().size() == 1);
+    assert(middleware.advisories()[0] == "SOC above maximum operating limit while discharging");
+    assert(middleware.faults().empty());
+
+    // Test hard fault: incorrect direction, SOC below min, discharging (positive current)
+    middleware.enhance_cycle(360.0, 10.0, 25.0, 0.05, 1.0);
     diag = middleware.diagnostics();
     assert(diag.safety_fault);
     assert(diag.soc_warning);
     summary = middleware.get_status_summary();
     assert(summary.find("WARNINGS ACTIVE") != std::string::npos);
+    assert(summary.find("ADVISORIES ACTIVE") == std::string::npos);
+    assert(middleware.advisories().empty());
+    assert(middleware.faults().size() == 1);
+    assert(middleware.faults()[0] == "SOC below minimum operating limit while discharging");
+
+    // Test combined state: genuine advisory + genuine hard fault (e.g. low temp + over discharge current)
+    // First setup the combined condition.
+    // Temperature below min (advisory if resting/charging, wait, let's look at temp logic: < min_operating_temp & current < 0 is advisory)
+    // Actually, let's just trigger max charge current (hard fault) + soc advisory (soc below min, charging)
+    middleware.enhance_cycle(360.0, -2000.0, 25.0, 0.05, 1.0); // charge current exceeded (fault) + SOC below min, charging (advisory)
+    diag = middleware.diagnostics();
+    assert(diag.safety_fault);
+    assert(diag.soc_warning);
+    summary = middleware.get_status_summary();
+    assert(summary.find("WARNINGS ACTIVE") != std::string::npos);
+    assert(summary.find("ADVISORIES ACTIVE") != std::string::npos);
+    assert(!middleware.advisories().empty());
+    assert(!middleware.faults().empty());
 
     std::cout << " PASS\n";
     return true;

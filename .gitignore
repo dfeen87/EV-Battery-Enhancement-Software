@@ -21,3 +21,8 @@ _codeql_detected_source_root
 # OS files
 .DS_Store
 Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class

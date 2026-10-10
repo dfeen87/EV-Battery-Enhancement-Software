@@ -321,6 +321,8 @@ public:
     const DiagnosticReport& diagnostics() const { return diag_; }
     const DiagnosticReport* diagnostics_ptr() const { return &diag_; }
     DiagnosticReport get_diagnostics() const { return diag_; }
+    const std::vector<std::string>& advisories() const { return safety_.advisories(); }
+    const std::vector<std::string>& faults() const { return safety_.faults(); }
 
     ds::HealthPrediction get_health_forecast(double cycles_ahead = 100.0) {
         if (!initialized_) throw std::runtime_error("Middleware not initialized");
@@ -354,7 +356,7 @@ public:
             status += "  ⚠️  WARNINGS ACTIVE\n";
         }
 
-        if (diag_.soc_warning || diag_.low_temp_warning) {
+        if (!safety_.advisories().empty()) {
             status += "  ℹ️  ADVISORIES ACTIVE\n";
         }
 
