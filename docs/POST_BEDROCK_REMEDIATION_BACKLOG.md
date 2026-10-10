@@ -8,8 +8,11 @@ The initial three repair workstreams are raw BMS fault preservation, current
 drive/regen ceilings taking precedence over transition smoothing, and malformed
 C++/Python governor evidence. The review is limited to two focused review-and-repair
 iterations. The follow-up on the same PR addresses PB-04, PB-05, and PB-07 with
-one independent review and at most one focused corrective iteration. Resolved
-entries retain their original reproduction evidence; tests on other entries remain
+one independent review and at most one focused corrective iteration.
+
+The state-integrity phase addresses PB-02, PB-01, and PB-03 in dependency order,
+with phase-specific evidence in [STATE_INTEGRITY_REMEDIATION.md](STATE_INTEGRITY_REMEDIATION.md).
+Resolved entries retain their original reproduction evidence; tests on other entries remain
 requirements for subsequent work, not reported passing tests.
 
 Severity describes the software boundary and potential consequence. Physical
@@ -32,7 +35,7 @@ Dependencies below are technical ordering suggestions; unrelated items can proce
 independently. Keep public interfaces, valid configured policies, and DS mathematics
 compatible where possible. Add failing regressions before each correction.
 
-## PB-01 — Partial multi-cell commit after a rejected cycle
+## PB-01 — Partial multi-cell commit after a rejected cycle — resolved
 
 - **Severity / confidence:** High; confirmed.
 - **File / function:** `include/ds_advanced_features.hpp`, `ds::advanced::MultiCellPack::update_all_cells`.
@@ -41,8 +44,9 @@ compatible where possible. Add failing regressions before each correction.
 - **Minimal correction:** Validate the complete input set, compute all cells and pack statistics in candidate storage, and commit them together only after every cell succeeds.
 - **Required regressions:** Invalid first/middle/last cell, invalid current/timestep, and finite overflow; compare every cell and statistic before/after failure; preserve ordinary pack updates.
 - **Dependencies:** PB-02 improves the lower-level update boundary but does not by itself make a multi-cell transaction atomic.
+- **State-integrity correction / evidence:** Complete sensor validation precedes candidate cells/statistics/weak flags; finite aggregate arithmetic is checked before a nonthrowing whole-cycle commit. The original two-cell rejection preserves both cells at `1 s` and `3.7 V`, cached `7.4 V`, and current `10 A`. `test_state_integrity pack` checks all cell fields and nine statistics, invalid first/middle/last readings, current/timestep errors, finite cell/aggregate overflow, and recovery (4,029 passing checks). Temporary candidate storage is O(cell count); element references are invalidated on successful commits. See the phase report for pre-fix failures and compatibility evidence.
 
-## PB-02 — Direct DS coupling mutates state before numerical failure
+## PB-02 — Direct DS coupling mutates state before numerical failure — resolved
 
 - **Severity / confidence:** High; confirmed for direct callers.
 - **File / function:** `include/ds_battery_core.hpp`, `ds::DSCoupling::update`.
@@ -51,8 +55,9 @@ compatible where possible. Add failing regressions before each correction.
 - **Minimal correction:** Compute into a candidate inside `DSCoupling::update` and assign the supplied state only after postconditions pass.
 - **Required regressions:** Direct finite-overflow rejection preserves the complete state; malformed input state and invalid timestep preserve it; normal updates retain existing numerical results.
 - **Dependencies:** Implement before or alongside PB-01; preserve the outer enhancement candidate/commit contract.
+- **State-integrity correction / evidence:** Direct coupling computes a complete candidate and commits only after existing validity postconditions pass. The original DBL_MAX timestep still throws while preserving time `1 s`, throughput `10/3600 Ah`, and the entire prior state. `test_state_integrity coupling` first failed 15 checks and now passes all 379 checks, including malformed-state/timestep rejection and recovery. Valid equations and calculation order are unchanged.
 
-## PB-03 — Sub-minimum timestep publishes mixed physical and computed state
+## PB-03 — Sub-minimum timestep publishes mixed physical and computed state — resolved
 
 - **Severity / confidence:** High; confirmed.
 - **File / functions:** `include/ds_battery_core.hpp`, `ds::DSEnhancement::enhance` and the `dt < tau_min` return in `ds::DSCoupling::update`.
@@ -61,6 +66,7 @@ compatible where possible. Add failing regressions before each correction.
 - **Minimal correction:** Define and enforce the short-step contract at the owning enhancement boundary: defer the entire cycle, reject it before mutation, or accumulate time/inputs for a full update. Do not silently commit new fields with stale derived values.
 - **Required regressions:** Below, exactly at, and above `tau_min`; changed voltage/SOC; repeated short steps; state, time, energy, and stability consistency.
 - **Dependencies:** Review existing simulation short-step expectations before choosing the compatible behavior; PB-02 alone does not resolve the early return.
+- **State-integrity correction / evidence:** Coupling, enhancement, and pack updates reject `0 < dt < tau_min` with `std::invalid_argument` before mutation; no sensor/time buffering occurs. Equality and larger intervals retain prior equations. Existing documented simulations use supported intervals. The original reproduction now preserves `360 V`, SOC `0.8`, time `1 s`, and energy `77760000 J`; a supported subsequent `400 V`/SOC `0.5` cycle computes `54000000 J`. `test_state_integrity short` passes 1,273 checks covering adjacent/equal boundaries, repeated short calls, custom minima, energy consistency, middleware accounting and adapter unavailable evidence. This deliberately changes formerly silent short-cycle behavior; callers must provide full intervals or configure a smaller minimum.
 
 ## PB-04 — Direct RAPS, torque, and regen paths accept NaN temperature — resolved
 
@@ -108,7 +114,7 @@ compatible where possible. Add failing regressions before each correction.
 - **Required regressions:** Before initialization, after initialization without a cycle, successful cycle, rejected cycle, and subsequent successful recovery; verify trust-gate decisions and availability metadata.
 - **Dependencies:** Raw fault preservation is necessary but does not supply cycle availability; avoid silently resetting useful diagnostic history.
 - **8.0.1 correction / evidence:** A private availability flag starts false, clears on initialization/reset and before every attempted update, and becomes true only after `enhance_cycle` returns. Unavailable evaluation and the recommendation getter return Level 3; telemetry has health/trust `0`, anomaly true, and an explicit missing-successful-update reason. Middleware exceptions propagate and its last good model remains intact. `test_bms_adapter_evidence` has 42 failing checks against reviewed head `b0558bc`, then passes after correction, including missing evidence, rejected latest cycle, finite-overflow rejection, recovery, reset, and TrustGate learning denial.
-- **Scope:** Availability proves only successful completion of the latest adapter-observed middleware call. Repeated evaluation is allowed until the next update attempt; no timestamp or external sensor-freshness claim is made. PB-03's sub-minimum timestep/model-epoch defect remains open and is not concealed by this flag.
+- **Scope:** Availability proves only successful completion of the latest adapter-observed middleware call. Repeated evaluation is allowed until the next update attempt; no timestamp or external sensor-freshness claim is made. The subsequent PB-03 state-integrity phase rejects sub-minimum cycles before mutation; this availability flag then denies their current-cycle evidence.
 
 ## PB-08 — Hardware adapter treats future and NaN clock evidence as fresh
 

@@ -305,37 +305,83 @@ public:
             cell_temperatures.size() != cells_.size()) {
             throw std::runtime_error("Cell data size mismatch");
         }
-        
-        pack_current_ = pack_current;
-        
-        // Update each cell independently
+        if (cells_.empty() || !std::isfinite(pack_current) ||
+            !std::isfinite(dt) || dt <= 0.0) {
+            throw std::invalid_argument("Pack cycle must be nonempty with finite current and positive dt");
+        }
+        if (dt < coupling_.get_config().tau_min) {
+            throw std::invalid_argument("Pack interval is below tau_min");
+        }
+        const double voltage_span = chemistry_.max_voltage_per_cell - chemistry_.min_voltage_per_cell;
+        if (!std::isfinite(chemistry_.min_voltage_per_cell) ||
+            !std::isfinite(voltage_span) || voltage_span <= 0.0) {
+            throw std::invalid_argument("Invalid cell voltage range");
+        }
+        // Validate the complete sensor set before doing any cell work.
         for (size_t i = 0; i < cells_.size(); ++i) {
-            cells_[i].state.voltage = cell_voltages[i];
-            cells_[i].state.temperature = cell_temperatures[i];
-            cells_[i].state.current = pack_current; // Series connection
+            if (!std::isfinite(cell_voltages[i]) || cell_voltages[i] < 0.0 ||
+                !std::isfinite(cell_temperatures[i])) {
+                throw std::invalid_argument("Cell measurements must be finite with nonnegative voltage");
+            }
+        }
+
+        // Copy cells and statistics together. No externally visible field changes
+        // until every cell and all aggregate arithmetic have succeeded.
+        MultiCellPack candidate = *this;
+        candidate.pack_current_ = pack_current;
+        for (size_t i = 0; i < cells_.size(); ++i) {
+            candidate.cells_[i].state.voltage = cell_voltages[i];
+            candidate.cells_[i].state.temperature = cell_temperatures[i];
+            candidate.cells_[i].state.current = pack_current; // Series connection
             
             // Estimate SoC from voltage (simplified - use proper OCV curve)
             double v_norm = (cell_voltages[i] - chemistry_.min_voltage_per_cell) /
-                           (chemistry_.max_voltage_per_cell - chemistry_.min_voltage_per_cell);
-            cells_[i].state.state_of_charge = std::clamp(v_norm, 0.0, 1.0);
+                           voltage_span;
+            if (!std::isfinite(v_norm)) {
+                throw std::runtime_error("Invalid cell SOC calculation");
+            }
+            candidate.cells_[i].state.state_of_charge = std::clamp(v_norm, 0.0, 1.0);
         }
 
 #ifdef DS_USE_GPU
         gpu::GPUAccelerator accelerator;
-        accelerator.update_cells_parallel(cells_, coupling_, dt);
+        accelerator.update_cells_parallel(candidate.cells_, candidate.coupling_, dt);
 #else
-        for (auto& cell : cells_) {
-            coupling_.update(cell.state, dt);
+        for (auto& cell : candidate.cells_) {
+            candidate.coupling_.update(cell.state, dt);
         }
 #endif
         
-        update_pack_statistics();
-        detect_weak_cells();
+        candidate.update_pack_statistics();
+        candidate.detect_weak_cells();
+        const double statistics[] = {candidate.pack_voltage_, candidate.pack_current_,
+            candidate.average_temperature_, candidate.min_cell_voltage_, candidate.max_cell_voltage_,
+            candidate.voltage_imbalance_, candidate.min_cell_temperature_, candidate.max_cell_temperature_,
+            candidate.temperature_spread_};
+        for (double value : statistics) {
+            if (!std::isfinite(value)) {
+                throw std::runtime_error("Invalid pack statistics after update");
+            }
+        }
+        // Vector swap and scalar assignments cannot throw; commit the whole cycle.
+        cells_.swap(candidate.cells_);
+        pack_voltage_ = candidate.pack_voltage_;
+        pack_current_ = candidate.pack_current_;
+        average_temperature_ = candidate.average_temperature_;
+        min_cell_voltage_ = candidate.min_cell_voltage_;
+        max_cell_voltage_ = candidate.max_cell_voltage_;
+        voltage_imbalance_ = candidate.voltage_imbalance_;
+        min_cell_temperature_ = candidate.min_cell_temperature_;
+        max_cell_temperature_ = candidate.max_cell_temperature_;
+        temperature_spread_ = candidate.temperature_spread_;
     }
     
     const std::vector<CellState>& get_cells() const { return cells_; }
     
     double get_pack_voltage() const { return pack_voltage_; }
+    double get_pack_current() const { return pack_current_; }
+    double get_min_cell_voltage() const { return min_cell_voltage_; }
+    double get_max_cell_voltage() const { return max_cell_voltage_; }
     double get_voltage_imbalance() const { return voltage_imbalance_; }
     double get_average_temperature() const { return average_temperature_; }
     double get_temperature_spread() const { return temperature_spread_; }
