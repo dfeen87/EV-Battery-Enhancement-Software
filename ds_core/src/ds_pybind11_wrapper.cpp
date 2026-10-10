@@ -110,6 +110,8 @@ PYBIND11_MODULE(ds_enhancer_pybind, m) {
         .def_readwrite("degradation_warning", &ds_plugin::DiagnosticReport::degradation_warning)
         .def_readwrite("balancing_required", &ds_plugin::DiagnosticReport::balancing_required)
         .def_readwrite("safety_fault", &ds_plugin::DiagnosticReport::safety_fault)
+        .def_readwrite("soc_warning", &ds_plugin::DiagnosticReport::soc_warning)
+        .def_readwrite("low_temp_warning", &ds_plugin::DiagnosticReport::low_temp_warning)
         .def_readwrite("instantaneous_power_kw", &ds_plugin::DiagnosticReport::instantaneous_power_kw)
         .def_readwrite("average_efficiency", &ds_plugin::DiagnosticReport::average_efficiency)
         .def_readwrite("energy_throughput_kwh", &ds_plugin::DiagnosticReport::energy_throughput_kwh)

@@ -100,6 +100,24 @@ struct SafetyLimits {
 
     double max_voltage_imbalance_mv = 100.0;
     double min_health_percent = 70.0;
+
+    void validate() const {
+        if (!std::isfinite(min_soc) || !std::isfinite(max_soc)) {
+            throw std::invalid_argument("SOC limits must be finite");
+        }
+        if (min_soc < 0.0 || max_soc > 1.0) {
+            throw std::invalid_argument("SOC limits must be between 0.0 and 1.0");
+        }
+        if (min_soc > max_soc) {
+            throw std::invalid_argument("min_soc cannot be greater than max_soc");
+        }
+        if (!std::isfinite(min_operating_temp) || !std::isfinite(max_operating_temp)) {
+            throw std::invalid_argument("Operating temperature limits must be finite");
+        }
+        if (min_operating_temp > max_operating_temp) {
+            throw std::invalid_argument("min_operating_temp cannot be greater than max_operating_temp");
+        }
+    }
 };
 
 /* ================= CONFIG ================= */
@@ -167,6 +185,8 @@ public:
             soc_warning_ = true;
             if (s.current > 0.0) {
                 faults_.push_back("SOC below minimum operating limit while discharging");
+            } else if (s.current < 0.0) {
+                advisories_.push_back("SOC below minimum operating limit while charging");
             } else if (s.current == 0.0) {
                 advisories_.push_back("SOC below minimum operating limit while resting");
             }
@@ -176,6 +196,8 @@ public:
             soc_warning_ = true;
             if (s.current < 0.0) {
                 faults_.push_back("SOC above maximum operating limit while charging");
+            } else if (s.current > 0.0) {
+                advisories_.push_back("SOC above maximum operating limit while discharging");
             } else if (s.current == 0.0) {
                 advisories_.push_back("SOC above maximum operating limit while resting");
             }
@@ -227,6 +249,8 @@ public:
     DSBMSMiddleware() = default;
 
     void init(double capacity_ah, double voltage_v) {
+        config_.safety_limits.validate();
+
         config_.nominal_capacity_ah = capacity_ah;
         config_.nominal_voltage = voltage_v;
         config_.ds_config.nominal_capacity_ah = capacity_ah;
@@ -240,6 +264,8 @@ public:
     }
 
     void init_advanced(const MiddlewareConfig& cfg) {
+        cfg.safety_limits.validate();
+
         config_ = cfg;
 
         ds_core_ = std::make_unique<ds::DSEnhancement>();
@@ -326,6 +352,10 @@ public:
         if (diag_.degradation_warning || diag_.thermal_warning ||
             diag_.weak_cell_warning || diag_.voltage_warning || diag_.safety_fault) {
             status += "  ⚠️  WARNINGS ACTIVE\n";
+        }
+
+        if (diag_.soc_warning || diag_.low_temp_warning) {
+            status += "  ℹ️  ADVISORIES ACTIVE\n";
         }
 
         return status;
