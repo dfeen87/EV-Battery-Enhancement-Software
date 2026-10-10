@@ -185,6 +185,10 @@ public:
     // OEM NOTE:
     // Replace this if you have a system time service. The default uses a simple
     // monotonic counter driven externally via set_now_seconds().
+    // NOTE: This adapter inherently depends on an externally supplied
+    // monotonically increasing clock. While future-dated timestamps are detected
+    // (producing a negative age), arbitrary clock rollbacks that still yield
+    // a positive age are not automatically detected and require external mitigation.
     double now_seconds() const override {
         return now_s_.load(std::memory_order_relaxed);
     }
@@ -379,7 +383,7 @@ private:
         }
 
         if (age < 0.0) {
-            throw std::runtime_error(std::string("Future timestamp or backward clock: ") + name);
+            throw std::runtime_error(std::string("Future timestamp detected: ") + name);
         }
 
         if (std::isnan(map_.max_signal_age_s) || std::isinf(map_.max_signal_age_s) || map_.max_signal_age_s < 0.0) {

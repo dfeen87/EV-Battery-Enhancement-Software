@@ -81,6 +81,54 @@ bool test_middleware_safety() {
     return true;
 }
 
+bool test_advisories_and_safety_limits_validation() {
+    std::cout << "Testing advisories and config validation..." << std::flush;
+    ds_plugin::DSBMSMiddleware middleware;
+
+    // Test config validation
+    ds_plugin::MiddlewareConfig config;
+    config.safety_limits.min_soc = std::numeric_limits<double>::infinity();
+    try {
+        middleware.init_advanced(config);
+        assert(false);
+    } catch (const std::invalid_argument&) {}
+
+    config.safety_limits.min_soc = 0.5;
+    config.safety_limits.max_soc = 0.4;
+    try {
+        middleware.init_advanced(config);
+        assert(false);
+    } catch (const std::invalid_argument&) {}
+
+    config.safety_limits.min_soc = 0.1;
+    config.safety_limits.max_soc = 0.9;
+    middleware.init_advanced(config);
+
+    // Test advisories: correct direction
+    middleware.enhance_cycle(360.0, -10.0, 25.0, 0.05, 1.0); // SOC below min, charging
+    auto diag = middleware.diagnostics();
+    assert(!diag.safety_fault);
+    assert(diag.soc_warning);
+    auto summary = middleware.get_status_summary();
+    assert(summary.find("ADVISORIES ACTIVE") != std::string::npos);
+
+    middleware.enhance_cycle(360.0, 10.0, 25.0, 0.95, 1.0); // SOC above max, discharging
+    diag = middleware.diagnostics();
+    assert(!diag.safety_fault);
+    assert(diag.soc_warning);
+
+    // Test hard fault: incorrect direction
+    middleware.enhance_cycle(360.0, 10.0, 25.0, 0.05, 1.0); // SOC below min, discharging
+    diag = middleware.diagnostics();
+    assert(diag.safety_fault);
+    assert(diag.soc_warning);
+    summary = middleware.get_status_summary();
+    assert(summary.find("WARNINGS ACTIVE") != std::string::npos);
+
+    std::cout << " PASS\n";
+    return true;
+}
+
 bool test_raw_sensor_safety_evidence() {
     std::cout << "Testing raw sensor safety evidence..." << std::flush;
     ds_plugin::DSBMSMiddleware middleware;
@@ -261,6 +309,7 @@ int main() {
         all_passed &= test_middleware_enhance_cycle();
         all_passed &= test_middleware_diagnostics();
         all_passed &= test_middleware_safety();
+        all_passed &= test_advisories_and_safety_limits_validation();
         all_passed &= test_raw_sensor_safety_evidence();
         all_passed &= test_configured_safety_limits_enforcement();
         all_passed &= test_non_finite_soc_rejection_is_atomic();

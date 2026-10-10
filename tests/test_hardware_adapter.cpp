@@ -88,13 +88,46 @@ bool test_clock_freshness() {
     adapter.set_now_seconds(std::numeric_limits<double>::infinity());
     try { adapter.read_pack_voltage(); assert(false); } catch (const std::runtime_error&) {}
 
-    // Case 7: Push new frame at NaN timestamp and read at valid timestamp
+    // Case 7: Negative infinity as configured max age
+    try {
+        ds_plugin::OEMSignalMap neg_inf_map;
+        neg_inf_map.max_signal_age_s = -std::numeric_limits<double>::infinity();
+        ds_plugin::DSHardwareAdapter adapter_neg_inf(fake_can, neg_inf_map, 1);
+        assert(false);
+    } catch (const std::invalid_argument&) {}
+
+    // Case 8: Zero maximum age with exact timestamp match
+    ds_plugin::OEMSignalMap map_zero;
+    map_zero.pack_voltage_id = 0x180;
+    map_zero.pack_voltage_scale = 1.0;
+    map_zero.max_signal_age_s = 0.0;
+    ds_plugin::DSHardwareAdapter adapter_zero(fake_can, map_zero, 1);
+    adapter_zero.set_now_seconds(200.0);
+    ds_plugin::CANFrame f2; f2.id = 0x180; f2.dlc = 8; encode_u16_le(f2, 360);
+    fake_can.push(f2);
+    adapter_zero.poll_can();
+    assert(adapter_zero.read_pack_voltage() == 360.0);
+
+    // Case 9: Zero maximum age with positive elapsed time
+    adapter_zero.set_now_seconds(200.0001);
+    try { adapter_zero.read_pack_voltage(); assert(false); } catch (const std::runtime_error&) {}
+
+    // Case 10: Non-finite cached timestamp
     adapter.set_now_seconds(std::numeric_limits<double>::quiet_NaN());
     fake_can.push(f);
     adapter.poll_can();
-
     adapter.set_now_seconds(110.0);
     try { adapter.read_pack_voltage(); assert(false); } catch (const std::runtime_error&) {}
+
+    // Case 11: Arbitrary clock rollback (yielding positive age but undetected internally)
+    adapter.set_now_seconds(100.0);
+    fake_can.push(f);
+    adapter.poll_can();
+    adapter.set_now_seconds(100.4);
+    assert(adapter.read_pack_voltage() == 360.0);
+    // rollback
+    adapter.set_now_seconds(100.2);
+    assert(adapter.read_pack_voltage() == 360.0); // positive age, not automatically detected!
 
     std::cout << " PASS\n";
     return true;
