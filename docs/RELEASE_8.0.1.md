@@ -144,8 +144,8 @@ findings; no finding was suppressed to obtain a pass. `make verify` stops there,
 before its host checks. The successful strict builds independently verify the
 compiler and platform prerequisites.
 
-GitHub reports successful [push CI](https://github.com/dfeen87/DS-EV-Battery-Enhancement-Software/actions/runs/38039909719)
-and [PR CI](https://github.com/dfeen87/DS-EV-Battery-Enhancement-Software/actions/runs/38039946242)
+GitHub reports successful [push CI](https://github.com/dfeen87/DS-EV/actions/runs/38039909719)
+and [PR CI](https://github.com/dfeen87/DS-EV/actions/runs/38039946242)
 for the implementation commit above. The hosted job reports successful CMake
 build, CTest, Python discovery, and simulation steps. Its status is distinct from
 the two missing-`sudo` errors in this cloud machine and from the separate
@@ -267,8 +267,8 @@ corrective iteration. No test assertions, warnings, or CI gates were weakened.
 | Hosted GitHub CI for follow-up implementation `6e52bfd52062a08f820356f38369291d73f4c248` | Push and PR workflows succeed; CMake build, CTest, Python discovery, and simulation steps report success |
 | Final diff / historical artifacts | Whitespace check passed; v8.0.0 release report, historical simulation observations, and tracked BEDROCK CLI binary unchanged |
 
-Hosted [push CI](https://github.com/dfeen87/DS-EV-Battery-Enhancement-Software/actions/runs/38043147399)
-and [PR CI](https://github.com/dfeen87/DS-EV-Battery-Enhancement-Software/actions/runs/38043151694)
+Hosted [push CI](https://github.com/dfeen87/DS-EV/actions/runs/38043147399)
+and [PR CI](https://github.com/dfeen87/DS-EV/actions/runs/38043151694)
 validate the follow-up implementation commit above. Per-step results were verified
 through the GitHub API; hosted per-test counts are not claimed. These successes
 remain distinct from the cloud-local missing-`sudo` errors and separate cppcheck

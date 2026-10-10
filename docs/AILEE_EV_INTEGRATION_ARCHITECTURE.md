@@ -114,7 +114,7 @@ AILEE's discrete 4-tier governance model maps directly to EV performance and saf
 ### 4.1 Updated Folder Structure
 
 ```
-DS-EV-Battery-Enhancement-Software/
+DS-EV/
 ├── include/
 │   ├── ailee_trust_layer/                 # NEW: AILEE Trust Layer C++ Headers
 │   │   ├── ailee_compartment.hpp          # Abstract base compartment interface & types

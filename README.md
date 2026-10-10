@@ -1,4 +1,5 @@
-# Dual‑State (DS/ds) EV Enhancement Software
+# DS-EV
+**Battery Intelligence, Energy Recovery & Safety Governance**
 
 ## Breakthrough Battery Management and EV Optimization
 
@@ -9,11 +10,11 @@
 [![Status: Production Ready](https://img.shields.io/badge/Status-Production%20Ready-green.svg)]()
 [![Hardened](https://img.shields.io/badge/Hardened-Edition%20Ready-Purple.svg)]()
 [![Version](https://img.shields.io/badge/Version-8.0.1-blue.svg)]()
-[![CI](https://github.com/dfeen87/EV-Battery-Enhancement-Software/actions/workflows/ci.yml/badge.svg)](https://github.com/dfeen87/EV-Battery-Enhancement-Software/actions/workflows/ci.yml)
+[![CI](https://github.com/dfeen87/DS-EV/actions/workflows/ci.yml/badge.svg)](https://github.com/dfeen87/DS-EV/actions/workflows/ci.yml)
 
 **Current release: DS-EV v8.0.1.** This compatible hardening release preserves raw sensor faults, enforces current protection ceilings, and rejects malformed horsepower-governance evidence. See [the v8.0.1 engineering report](docs/RELEASE_8.0.1.md) and [prioritized remediation backlog](docs/POST_BEDROCK_REMEDIATION_BACKLOG.md). The [historical v8.0.0 BEDROCK report](docs/RELEASE_8.0.0.md) is preserved. Software test success is not vehicle hardware validation or safety certification.
 
-Dual‑State (DS/ds) EV Enhancement Software is a production-ready, high-performance battery and power management suite for electric vehicles. By treating batteries as dual-state systems—where physical metrics (like voltage, current, and temperature) and historical stress tracking are dynamically coupled—we achieve earlier degradation detection, better health prediction, and optimized charging strategies.
+DS-EV is a production-ready, high-performance battery and power management suite for electric vehicles. By treating batteries as dual-state systems—where physical metrics (like voltage, current, and temperature) and historical stress tracking are dynamically coupled—we achieve earlier degradation detection, better health prediction, and optimized charging strategies.
 
 ---
 
@@ -800,7 +801,7 @@ Visualization, UX, and presentation remain fully owned by the automaker.
 ## 📁 Repository Structure
 
 ```
-DS-EV-Battery-Enhancement-Software/
+DS-EV/
 ├── include/                              # Public header-only API
 │   ├── ds_battery_enhancement.hpp       # Core DS dual-state engine
 │   ├── ds_battery_core.hpp              # Foundational battery types and state
@@ -995,7 +996,7 @@ sudo apt install build-essential cmake git python3 python3-pip
 
 ### **2. Clone the DS Repository**
 ```bash
-git clone https://github.com/dfeen87/DS-EV-Battery-Enhancement-Software.git
+git clone https://github.com/dfeen87/DS-EV.git
 cd ds-enhancement
 ```
 
@@ -1044,6 +1045,8 @@ This provides torque/regen optimization insights, stress‑aware driving guidanc
 ```bash
 make update
 ```
+
+**Note on Updater Limitations:** The default configured v8.0.1 `payload.tar.gz` remote release asset is unverified. When this occurs, the `scripts/update.py` script automatically falls back to constructing a simulated package from the current local source tree. A successful simulated update ensures continuity of the local tooling but does not represent a successfully downloaded or installed genuine remote software update.
 
 NOTE: The install.log file records build and installation details only; vehicle‑specific information is generated dynamically at runtime and does not require updates to the install log.
 
